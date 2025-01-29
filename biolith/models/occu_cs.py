@@ -40,7 +40,7 @@ def occu_cs(site_covs: np.ndarray, obs_covs: np.ndarray, obs: Optional[np.ndarra
     # Continuous score parameters
     mu0 = numpyro.sample('mu0', dist.Uniform(-100, 100))
     mu1 = numpyro.sample('mu1', dist.Uniform(-100, 100))
-    numpyro.factor("mu_constraint", -jax.nn.softplus(mu0 - mu1))  # constrain such that mu0 < mu1
+    numpyro.factor("mu_constraint", -1e5 * jax.nn.softplus(mu0 - mu1))  # constrain such that mu0 < mu1
     sigma0 = numpyro.sample('sigma0', dist.HalfNormal())
     sigma1 = numpyro.sample('sigma1', dist.HalfNormal())
 
@@ -58,81 +58,70 @@ def occu_cs(site_covs: np.ndarray, obs_covs: np.ndarray, obs: Optional[np.ndarra
         with numpyro.plate('time_periods', time_periods, dim=-2):
 
             # Detection process
-            # TODO: instead of psi * jax.nn.sigmoid(...) this should be z * jax.nn.sigmoid(...), but that does not converge
-            f = numpyro.sample('f', dist.Bernoulli(psi * jax.nn.sigmoid(jnp.tile(alpha[0], (time_periods, n_sites)) + jnp.sum(jnp.array([alpha[i + 1] * obs_covs[i, ...] for i in range(n_obs_covs)]), axis=0))), infer={'enumerate': 'parallel'})
+            f = numpyro.sample('f', dist.Bernoulli(z * jax.nn.sigmoid(jnp.tile(alpha[0], (time_periods, n_sites)) + jnp.sum(jnp.array([alpha[i + 1] * obs_covs[i, ...] for i in range(n_obs_covs)]), axis=0))), infer={'enumerate': 'parallel'})
 
             with numpyro.handlers.mask(mask=jnp.isfinite(obs)):
-                s = numpyro.sample('s', dist.Normal(jnp.where(f == 0, mu0, mu1), jnp.where(f == 0, sigma0, sigma1)), obs=jnp.nan_to_num(obs))
+                numpyro.sample('s', dist.Normal((1 - f) * mu0 + f * mu1, (1 - f) * sigma0 + f * sigma1), obs=jnp.nan_to_num(obs))
 
 
-    # Estimate proportion of occupied sites
-    NOcc = numpyro.deterministic('NOcc', jnp.sum(z))
-    PropOcc = numpyro.deterministic('PropOcc', NOcc / n_sites)
+def simulate_cs(
+        n_site_covs=1,
+        n_obs_covs=1,
+        n_sites=100,  # number of sites
+        deployment_days_per_site=365,  # number of days each site is monitored
+        session_duration=7,  # 1, 7, or 30 days
+        simulate_missing=False,  # whether to simulate missing data by setting some observations to NaN
+        min_occupancy=0.25,  # minimum occupancy rate
+        max_occupancy=0.75,  # maximum occupancy rate
+        random_seed=0,
+):
 
-
-def simulate_cs():
     # Initialize random number generator
-    random_seed = 0
     rng = np.random.default_rng(random_seed)
 
-    # Generate occupancy and site-level covariates
-    n_sites = 100  # number of sites
-    n_site_covs = 4
-    site_covs = rng.normal(size=(n_sites, n_site_covs))
-    beta = [1, -0.05, 0.02, 0.01, -0.02]  # intercept and slopes for occupancy logistic regression
-    psi_cov = 1 / (1 + np.exp(-(beta[0] + np.sum([beta[i + 1] * site_covs[..., i] for i in range(n_site_covs)]))))
-    z = rng.binomial(n=1, p=psi_cov, size=n_sites)  # vector of latent occupancy status for each site
+    # Make sure occupancy and detection are not too close to 0 or 1
+    z = None
+    while z is None or z.mean() < min_occupancy or z.mean() > max_occupancy:
 
-    # Generate detection data
-    deployment_days_per_site = 365
-    detections_per_day = 10
-    
-    time_periods = round(deployment_days_per_site * detections_per_day)
+        # Generate intercept and slopes
+        beta = rng.normal(size=n_site_covs + 1)  # intercept and slopes for occupancy logistic regression
+        alpha = rng.normal(size=n_obs_covs + 1)  # intercept and slopes for detection logistic regression
 
-    # Create matrix of detection covariates
-    n_obs_covs = 3
-    obs_covs = rng.normal(size=(n_sites, time_periods, n_obs_covs))
-    alpha = [-0.5, 0.5, -0.5, 0]  # intercept and slopes for detection logistic regression
-    obs_reg = 1 / (1 + np.exp(-(alpha[0] + np.sum([alpha[i + 1] * obs_covs[..., i] for i in range(n_obs_covs)], axis=0))))
+        # Generate occupancy and site-level covariates
+        site_covs = rng.normal(size=(n_sites, n_site_covs))
+        psi = 1 / (1 + np.exp(-(beta[0].repeat(n_sites) + np.sum([beta[i + 1] * site_covs[..., i] for i in range(n_site_covs)], axis=0))))
+        z = rng.binomial(n=1, p=psi, size=n_sites)  # vector of latent occupancy status for each site
 
-    # Generate score distributions
-    mu0 = 0
-    sigma0 = 10
-    mu1 = 10
-    sigma1 = 5
+        # Generate detection data
+        time_periods = round(deployment_days_per_site / session_duration)
 
-    # Create matrix of detections
-    f = np.zeros((n_sites, time_periods))
-    dfa = np.zeros((n_sites, time_periods))
+        # Create matrix of detection covariates
+        obs_covs = rng.normal(size=(n_sites, time_periods, n_obs_covs))
+        p = 1 / (1 + np.exp(-(alpha[0].repeat(n_sites)[:, None] + np.sum([alpha[i + 1] * obs_covs[..., i] for i in range(n_obs_covs)], axis=0))))
 
-    # Create list for keeping track of true negative and true positive scores
-    true_negatives = []
-    true_positives = []
+        # Create matrix of detections
+        obs = np.zeros((n_sites, time_periods))
 
-    for i in range(n_sites):
-        # According to the Royle model in unmarked, false positives are generated only if the site is unoccupied
-        # Note this is different than how we think about false positives being a random occurrence per image.
-        # For now, this is generating positive/negative per time period, which is different than per image.
-        f[i] = rng.binomial(n=1, p=(obs_reg[i, :] * z[i]), size=time_periods)
-        for t in range(time_periods):
-            score = rng.normal(mu0 if f[i, t] == 0 else mu1, sigma0 if f[i, t] == 0 else sigma1)
-            dfa[i, t] = score
-            if f[i, t] == 0:
-                true_negatives.append(score)
-            else:
-                true_positives.append(score)
+        # Generate score distributions
+        mu0 = 0
+        sigma0 = 10
+        mu1 = 10
+        sigma1 = 5
 
-    obs = dfa
+        # Create matrix of detections
+        f = np.zeros((n_sites, time_periods))
+        obs = np.zeros((n_sites, time_periods))
 
-    # Simulate missing data:
-    obs[np.random.choice([True, False], size=obs.shape, p=[0.2, 0.8])] = np.nan
-    obs_covs[np.random.choice([True, False], size=obs_covs.shape, p=[0.05, 0.95])] = np.nan
-    site_covs[np.random.choice([True, False], size=site_covs.shape, p=[0.05, 0.95])] = np.nan
+        for i in range(n_sites):
+            f[i] = rng.binomial(n=1, p=(p[i, :] * z[i]), size=time_periods)
+            for t in range(time_periods):
+                obs[i, t] = rng.normal(mu0 if f[i, t] == 0 else mu1, sigma0 if f[i, t] == 0 else sigma1)
 
-    # Subsample list of true negatives and true positives to emulate human verification
-    num_verifications = 10
-    true_negatives = rng.choice(true_negatives, size=len(true_positives), replace=False)
-    true_positives = rng.choice(true_positives, size=len(true_positives), replace=False)
+        if simulate_missing:
+            # Simulate missing data:
+            obs[rng.choice([True, False], size=obs.shape, p=[0.2, 0.8])] = np.nan
+            obs_covs[rng.choice([True, False], size=obs_covs.shape, p=[0.05, 0.95])] = np.nan
+            site_covs[rng.choice([True, False], size=site_covs.shape, p=[0.05, 0.95])] = np.nan
 
     print(f"True occupancy: {np.mean(z):.4f}")
 
@@ -154,14 +143,14 @@ def simulate_cs():
 class TestOccuCS(unittest.TestCase):
 
     def test_occu(self):
-        data, true_params = simulate_cs()
+        data, true_params = simulate_cs(n_sites=1000, deployment_days_per_site=3650, n_obs_covs=2, n_site_covs=2, simulate_missing=True)
 
         from biolith.utils import fit
         results = fit(occu_cs, **data)
 
         self.assertTrue(np.allclose(results.samples["psi"].mean(), true_params["z"].mean(), atol=0.05))
-        self.assertTrue(np.allclose([results.samples[k].mean() for k in [f"cov_state_{i}" for i in range(len(true_params["beta"]))]], true_params["beta"], atol=0.5))
-        self.assertTrue(np.allclose([results.samples[k].mean() for k in [f"cov_det_{i}" for i in range(len(true_params["alpha"]))]], true_params["alpha"], atol=0.5))
+        self.assertTrue(np.allclose([results.samples[k].mean() for k in [f"cov_state_{i}" for i in range(len(true_params["beta"]))]], true_params["beta"], atol=0.25))
+        self.assertTrue(np.allclose([results.samples[k].mean() for k in [f"cov_det_{i}" for i in range(len(true_params["alpha"]))]], true_params["alpha"], atol=0.25))
         self.assertTrue(np.allclose(results.samples["mu0"].mean(), true_params["mu0"], atol=1))
         self.assertTrue(np.allclose(results.samples["mu1"].mean(), true_params["mu1"], atol=1))
         self.assertTrue(np.allclose(results.samples["sigma0"].mean(), true_params["sigma0"], atol=1))
