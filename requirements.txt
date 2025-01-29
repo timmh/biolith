@@ -1,0 +1,5 @@
+# TODO: specify versions
+numpy
+pandas
+jax
+numpyro
