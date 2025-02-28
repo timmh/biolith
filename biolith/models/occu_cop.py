@@ -37,15 +37,11 @@ def occu_cop(site_covs: np.ndarray, obs_covs: np.ndarray, session_duration: Opti
     obs_covs = jnp.nan_to_num(obs_covs)
     site_covs = jnp.nan_to_num(site_covs)
 
-    # get maximum observation rate
-    # TODO: make this a parameter
-    obs_max = jnp.where(jnp.isfinite(obs), obs, 0).max()
-
     # Model false positive rate for both occupied and unoccupied sites
-    rate_fp_constant = numpyro.sample('rate_fp_constant', dist.Uniform(0, obs_max)) if false_positives_constant else 0
+    rate_fp_constant = numpyro.sample('rate_fp_constant', dist.Exponential()) if false_positives_constant else 0
     
     # Model false positive rate only for occupied sites
-    rate_fp_unoccupied = numpyro.sample('rate_fp_unoccupied', dist.Uniform(0, obs_max)) if false_positives_unoccupied else 0
+    rate_fp_unoccupied = numpyro.sample('rate_fp_unoccupied', dist.Exponential()) if false_positives_unoccupied else 0
     
     # Occupancy and detection covariates
     beta = jnp.array([numpyro.sample(f'beta_{i}', dist.Normal()) for i in range(n_site_covs + 1)])
@@ -66,9 +62,8 @@ def occu_cop(site_covs: np.ndarray, obs_covs: np.ndarray, session_duration: Opti
         with numpyro.plate('time_periods', time_periods, dim=-2):
 
             # Detection process
-            rate_detection = numpyro.deterministic(f'rate_detection', jax.nn.relu(jnp.tile(alpha[0], (time_periods, n_sites)) + jnp.sum(jnp.array([alpha[i + 1] * obs_covs[i, ...] for i in range(n_obs_covs)]), axis=0)))
+            rate_detection = numpyro.deterministic(f'rate_detection', jnp.exp(jnp.tile(alpha[0], (time_periods, n_sites)) + jnp.sum(jnp.array([alpha[i + 1] * obs_covs[i, ...] for i in range(n_obs_covs)]), axis=0)))
             l_det = z * rate_detection + (1 - z) * rate_fp_unoccupied + rate_fp_constant
-            l_det = jnp.clip(l_det, min=0)
 
             with numpyro.handlers.mask(mask=jnp.isfinite(obs)):
                 numpyro.sample(f'y', dist.Poisson(jnp.nan_to_num(session_duration * l_det)), obs=jnp.nan_to_num(obs))
@@ -80,12 +75,11 @@ def simulate_cop(
         n_sites=100,  # number of sites
         deployment_days_per_site=365,  # number of days each site is monitored
         session_duration=7,  # 1, 7, or 30 days
-        rate_fp=0,  # false positive rate for a given time point
         simulate_missing=False,  # whether to simulate missing data by setting some observations to NaN
         min_occupancy=0.25,  # minimum occupancy rate
         max_occupancy=0.75,  # maximum occupancy rate
-        min_observation_rate=0.1,  # minimum proportion of timesteps with observation
-        max_observation_rate=0.5,  # maximum proportion of timesteps with observation
+        min_observation_rate=0.5,  # minimum proportion of timesteps with observation
+        max_observation_rate=10,  # maximum proportion of timesteps with observation
         random_seed=0,
 ):
 
@@ -95,6 +89,9 @@ def simulate_cop(
     # Make sure occupancy and detection are not too close to 0 or 1
     z = None
     while z is None or z.mean() < min_occupancy or z.mean() > max_occupancy or np.mean(obs[np.isfinite(obs)]) < min_observation_rate or np.mean(obs[np.isfinite(obs)]) > max_observation_rate:
+
+        # Generate false positive rate
+        rate_fp = rng.uniform(0.05, 0.2)
 
         # Generate intercept and slopes
         beta = rng.normal(size=n_site_covs + 1)  # intercept and slopes for occupancy logistic regression
@@ -110,7 +107,7 @@ def simulate_cop(
 
         # Create matrix of detection covariates
         obs_covs = rng.normal(size=(n_sites, time_periods, n_obs_covs))
-        detection_rate = np.clip(alpha[0].repeat(n_sites)[:, None] + np.sum([alpha[i + 1] * obs_covs[..., i] for i in range(n_obs_covs)], axis=0), a_min=0, a_max=np.inf)
+        detection_rate = np.exp(alpha[0].repeat(n_sites)[:, None] + np.sum([alpha[i + 1] * obs_covs[..., i] for i in range(n_obs_covs)], axis=0))
 
         # Create matrix of detections
         obs = np.zeros((n_sites, time_periods))
@@ -118,10 +115,7 @@ def simulate_cop(
         for i in range(n_sites):
             # Similar to the Royle model in unmarked, false positives are generated only if the site is unoccupied
             # Note this is different than how we think about false positives being a random occurrence per image.
-            obs[i, :] = rng.poisson(lam=(session_duration * detection_rate[i, :] * z[i] + rate_fp * (1 - z[i])), size=time_periods)
-
-        # Convert counts into observed occupancy
-        obs = (obs >= 1) * 1.
+            obs[i, :] = rng.poisson(lam=(session_duration * (detection_rate[i, :] * z[i] + rate_fp * (1 - z[i]))), size=time_periods)
 
         if simulate_missing:
             # Simulate missing data:
@@ -130,6 +124,7 @@ def simulate_cop(
             site_covs[rng.choice([True, False], size=site_covs.shape, p=[0.05, 0.95])] = np.nan
 
     print(f"True occupancy: {np.mean(z):.4f}")
+    print(f"Fraction of observations with at least one observation: {np.mean(obs[np.isfinite(obs)] >= 1):.4f}")
     print(f"Mean rate: {np.mean(obs[np.isfinite(obs)]):.4f}")
 
     # session duration is assumed to be constant over all time periods
