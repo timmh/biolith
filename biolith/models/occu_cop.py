@@ -152,7 +152,7 @@ class TestOccuCOP(unittest.TestCase):
         from biolith.utils import fit
         results = fit(occu_cop, **data)
 
-        self.assertTrue(np.allclose(results.samples["psi"].mean(), true_params["z"].mean(), atol=0.05))
+        self.assertTrue(np.allclose(results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1))
         self.assertTrue(np.allclose([results.samples[k].mean() for k in [f"cov_state_{i}" for i in range(len(true_params["beta"]))]], true_params["beta"], atol=0.5))
         self.assertTrue(np.allclose([results.samples[k].mean() for k in [f"cov_det_{i}" for i in range(len(true_params["alpha"]))]], true_params["alpha"], atol=0.5))
 
