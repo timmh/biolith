@@ -33,7 +33,7 @@ def occu_cop(site_covs: np.ndarray, obs_covs: np.ndarray, session_duration: Opti
 
     # Mask observations where covariates are missing
     obs_mask = jnp.isnan(obs_covs).any(axis=-1) | jnp.tile(jnp.isnan(site_covs).any(axis=-1)[:, None], (1, time_periods))
-    obs = jnp.where(obs_mask, jnp.nan, obs)
+    obs = jnp.where(obs_mask, jnp.nan, obs) if obs is not None else None
     obs_covs = jnp.nan_to_num(obs_covs)
     site_covs = jnp.nan_to_num(site_covs)
 
@@ -65,8 +65,9 @@ def occu_cop(site_covs: np.ndarray, obs_covs: np.ndarray, session_duration: Opti
             rate_detection = numpyro.deterministic(f'rate_detection', jnp.exp(jnp.tile(alpha[0], (time_periods, n_sites)) + jnp.sum(jnp.array([alpha[i + 1] * obs_covs[i, ...] for i in range(n_obs_covs)]), axis=0)))
             l_det = z * rate_detection + (1 - z) * rate_fp_unoccupied + rate_fp_constant
 
-            with numpyro.handlers.mask(mask=jnp.isfinite(obs)):
-                numpyro.sample(f'y', dist.Poisson(jnp.nan_to_num(session_duration * l_det)), obs=jnp.nan_to_num(obs))
+            if obs is not None:
+                with numpyro.handlers.mask(mask=jnp.isfinite(obs)):
+                    numpyro.sample(f'y', dist.Poisson(jnp.nan_to_num(session_duration * l_det)), obs=jnp.nan_to_num(obs))
 
 
 def simulate_cop(

@@ -13,8 +13,8 @@ def occu(site_covs: np.ndarray, obs_covs: np.ndarray, false_positives_constant: 
     assert obs is None or obs.ndim == 2, "obs must be None or of shape (n_sites, time_periods)"
     assert site_covs.ndim == 2, "site_covs must be of shape (n_sites, n_site_covs)"
     assert obs_covs.ndim == 3, "obs_covs must be of shape (n_sites, time_periods, n_obs_covs)"
-    assert (obs[np.isfinite(obs)] >= 0).all(), "observations must be non-negative"
-    assert (obs[np.isfinite(obs)] <= 1).all(), "observations must be binary"
+    assert obs is None or (obs[np.isfinite(obs)] >= 0).all(), "observations must be non-negative"
+    assert obs is None or (obs[np.isfinite(obs)] <= 1).all(), "observations must be binary"
     assert not (false_positives_constant and false_positives_unoccupied), "false_positives_constant and false_positives_unoccupied cannot both be True"
 
     n_sites = site_covs.shape[0]
@@ -30,7 +30,7 @@ def occu(site_covs: np.ndarray, obs_covs: np.ndarray, false_positives_constant: 
 
     # Mask observations where covariates are missing
     obs_mask = jnp.isnan(obs_covs).any(axis=-1) | jnp.tile(jnp.isnan(site_covs).any(axis=-1)[:, None], (1, time_periods))
-    obs = jnp.where(obs_mask, jnp.nan, obs)
+    obs = jnp.where(obs_mask, jnp.nan, obs) if obs is not None else None
     obs_covs = jnp.nan_to_num(obs_covs)
     site_covs = jnp.nan_to_num(site_covs)
 
@@ -48,7 +48,7 @@ def occu(site_covs: np.ndarray, obs_covs: np.ndarray, false_positives_constant: 
     # Transpose in order to fit NumPyro's plate structure
     site_covs = site_covs.transpose((1, 0))
     obs_covs = obs_covs.transpose((2, 1, 0))
-    obs = obs.transpose((1, 0))
+    obs = obs.transpose((1, 0)) if obs is not None else None
 
     with numpyro.plate('site', n_sites, dim=-1):
 
@@ -63,8 +63,9 @@ def occu(site_covs: np.ndarray, obs_covs: np.ndarray, false_positives_constant: 
             p_det = z * prob_detection + (1 - z) * prob_fp_unoccupied + prob_fp_constant
             p_det = jnp.clip(p_det, min=0, max=1)
 
-            with numpyro.handlers.mask(mask=jnp.isfinite(obs)):
-                numpyro.sample(f'y', dist.Bernoulli(p_det), obs=jnp.nan_to_num(obs), infer={'enumerate': 'parallel'})
+            if obs is not None:
+                with numpyro.handlers.mask(mask=jnp.isfinite(obs)):
+                    numpyro.sample(f'y', dist.Bernoulli(p_det), obs=jnp.nan_to_num(obs), infer={'enumerate': 'parallel'})
 
 
 def simulate(

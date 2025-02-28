@@ -29,7 +29,7 @@ def occu_cs(site_covs: np.ndarray, obs_covs: np.ndarray, obs: Optional[np.ndarra
 
     # Mask observations where covariates are missing
     obs_mask = jnp.isnan(obs_covs).any(axis=-1) | jnp.tile(jnp.isnan(site_covs).any(axis=-1)[:, None], (1, time_periods))
-    obs = jnp.where(obs_mask, jnp.nan, obs)
+    obs = jnp.where(obs_mask, jnp.nan, obs) if obs is not None else None
     obs_covs = jnp.nan_to_num(obs_covs)
     site_covs = jnp.nan_to_num(site_covs)
     
@@ -60,8 +60,9 @@ def occu_cs(site_covs: np.ndarray, obs_covs: np.ndarray, obs: Optional[np.ndarra
             # Detection process
             f = numpyro.sample('f', dist.Bernoulli(z * jax.nn.sigmoid(jnp.tile(alpha[0], (time_periods, n_sites)) + jnp.sum(jnp.array([alpha[i + 1] * obs_covs[i, ...] for i in range(n_obs_covs)]), axis=0))), infer={'enumerate': 'parallel'})
 
-            with numpyro.handlers.mask(mask=jnp.isfinite(obs)):
-                numpyro.sample('s', dist.Normal((1 - f) * mu0 + f * mu1, (1 - f) * sigma0 + f * sigma1), obs=jnp.nan_to_num(obs))
+            if obs is not None:
+                with numpyro.handlers.mask(mask=jnp.isfinite(obs)):
+                    numpyro.sample('s', dist.Normal((1 - f) * mu0 + f * mu1, (1 - f) * sigma0 + f * sigma1), obs=jnp.nan_to_num(obs))
 
 
 def simulate_cs(
