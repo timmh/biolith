@@ -14,7 +14,14 @@ setup(
         description=DESCRIPTION,
         long_description=LONG_DESCRIPTION,
         packages=find_packages(),
-        install_requires=[],
+        install_requires=[
+            # TODO: specify versions
+            "numpy",
+            "pandas",
+            "jax",
+            "numpyro",
+            "funsor",  # currently required in order to do inference for models with discrete latent variables
+        ],
         keywords=['python', 'occupancy', 'numpyro', 'bayesian', 'ecology'],
         classifiers= [
             "Development Status :: 3 - Alpha",
