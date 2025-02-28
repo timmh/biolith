@@ -3,4 +3,4 @@ numpy
 pandas
 jax
 numpyro
-funsor
+funsor  # currently required in order to do inference for models with discrete latent variables
