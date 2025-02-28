@@ -147,7 +147,7 @@ def simulate_cop(
 class TestOccuCOP(unittest.TestCase):
 
     def test_occu(self):
-        data, true_params = simulate_cop(n_sites=1000, deployment_days_per_site=3650, n_obs_covs=2, n_site_covs=2, simulate_missing=True)
+        data, true_params = simulate_cop(simulate_missing=True)
 
         from biolith.utils import fit
         results = fit(occu_cop, **data)

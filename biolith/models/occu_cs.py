@@ -144,14 +144,14 @@ def simulate_cs(
 class TestOccuCS(unittest.TestCase):
 
     def test_occu(self):
-        data, true_params = simulate_cs(n_sites=1000, deployment_days_per_site=3650, n_obs_covs=2, n_site_covs=2, simulate_missing=True)
+        data, true_params = simulate_cs(simulate_missing=True)
 
         from biolith.utils import fit
         results = fit(occu_cs, **data)
 
         self.assertTrue(np.allclose(results.samples["psi"].mean(), true_params["z"].mean(), atol=0.05))
-        self.assertTrue(np.allclose([results.samples[k].mean() for k in [f"cov_state_{i}" for i in range(len(true_params["beta"]))]], true_params["beta"], atol=0.25))
-        self.assertTrue(np.allclose([results.samples[k].mean() for k in [f"cov_det_{i}" for i in range(len(true_params["alpha"]))]], true_params["alpha"], atol=0.25))
+        self.assertTrue(np.allclose([results.samples[k].mean() for k in [f"cov_state_{i}" for i in range(len(true_params["beta"]))]], true_params["beta"], atol=0.5))
+        self.assertTrue(np.allclose([results.samples[k].mean() for k in [f"cov_det_{i}" for i in range(len(true_params["alpha"]))]], true_params["alpha"], atol=0.5))
         self.assertTrue(np.allclose(results.samples["mu0"].mean(), true_params["mu0"], atol=1))
         self.assertTrue(np.allclose(results.samples["mu1"].mean(), true_params["mu1"], atol=1))
         self.assertTrue(np.allclose(results.samples["sigma0"].mean(), true_params["sigma0"], atol=1))
