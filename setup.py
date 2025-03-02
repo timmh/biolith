@@ -22,6 +22,7 @@ setup(
             "numpyro",
             "funsor",  # currently required in order to do inference for models with discrete latent variables
         ],
+        license="MIT",
         keywords=['python', 'occupancy', 'numpyro', 'bayesian', 'ecology'],
         classifiers= [
             "Development Status :: 3 - Alpha",
