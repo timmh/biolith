@@ -1,5 +1,7 @@
 # <img alt="Biolith logo" src="assets/biolith.svg" style="height: 2em;"> Biolith: <ins>B</ins>ayes<ins>i</ins>an Ec<ins>ol</ins>ogical Modeling <ins>i</ins>n Py<ins>th</ins>on
 
+[![Test](https://github.com/timmh/biolith/actions/workflows/test.yml/badge.svg)](https://github.com/timmh/biolith/actions/workflows/test.yml)
+
 Biolith is a Python package designed for bayesian ecological modeling and analysis with a focus on occupancy modeling. It has similar goals to [Unmarked](https://github.com/biodiverse/unmarked) and [spOccupancy](https://github.com/biodiverse/spOccupancy/), but is written in Python and uses [NumPyro](https://num.pyro.ai) and [JAX](https://jax.readthedocs.io) to enable rapid model fitting and iteration.
 
 ## Features
