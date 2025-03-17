@@ -1,8 +1,11 @@
 from setuptools import setup, find_packages
 
-VERSION = '0.0.1' 
-DESCRIPTION = 'Bayesian ecological modeling in Python'
-LONG_DESCRIPTION = 'A package that provides Bayesian ecological modeling in Python'
+VERSION = '0.0.2'
+DESCRIPTION = 'Bayesian Ecological Modeling in Python '
+
+# Read readme
+from pathlib import Path
+LONG_DESCRIPTION = (Path(__file__).parent / "README.md").read_text()
 
 # Setting up
 setup(
@@ -13,6 +16,7 @@ setup(
         author_email="haucke@mit.edu",
         description=DESCRIPTION,
         long_description=LONG_DESCRIPTION,
+        long_description_content_type="text/markdown",
         packages=find_packages(),
         install_requires=[
             # TODO: specify versions
