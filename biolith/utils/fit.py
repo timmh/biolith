@@ -18,7 +18,7 @@ def fit(
         num_samples=1000,
         num_warmup=1000,
         random_seed=0,
-        num_chains=1,
+        num_chains=5,
         **kwargs,
     ):
 
