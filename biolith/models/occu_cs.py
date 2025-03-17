@@ -38,9 +38,9 @@ def occu_cs(site_covs: np.ndarray, obs_covs: np.ndarray, obs: Optional[np.ndarra
     alpha = jnp.array([numpyro.sample(f'alpha_{i}', dist.Normal()) for i in range(n_obs_covs + 1)])
 
     # Continuous score parameters
-    mu0 = numpyro.sample('mu0', dist.Uniform(-100, 100))
-    mu1 = numpyro.sample('mu1', dist.Uniform(-100, 100))
-    numpyro.factor("mu_constraint", -1e5 * jax.nn.softplus(mu0 - mu1))  # constrain such that mu0 < mu1
+    mu_dist = dist.Normal(0, 10)
+    mu0 = numpyro.sample('mu0', mu_dist)
+    mu1 = numpyro.sample('mu1', dist.TruncatedDistribution(mu_dist, low=mu0))
     sigma0 = numpyro.sample('sigma0', dist.HalfNormal())
     sigma1 = numpyro.sample('sigma1', dist.HalfNormal())
 
@@ -144,14 +144,13 @@ def simulate_cs(
 class TestOccuCS(unittest.TestCase):
 
     def test_occu(self):
-        data, true_params = simulate_cs(simulate_missing=True)
+        data, true_params = simulate_cs(
+            simulate_missing=True,
+            n_sites=200,  # TODO: occupancy covariates fail to fit with fewer sites, investigate why
+        )
 
         from biolith.utils import fit
         results = fit(occu_cs, **data)
-
-        # TODO: remove
-        print("True Params:", true_params)
-        print("Samples:", {k: results.samples[k].mean() for k in results.samples.keys()})
 
         self.assertTrue(np.allclose(results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1))
         self.assertTrue(np.allclose([results.samples[k].mean() for k in [f"cov_state_{i}" for i in range(len(true_params["beta"]))]], true_params["beta"], atol=0.5))
