@@ -20,7 +20,7 @@ pip install git+https://github.com/timmh/biolith
 
 ## Usage
 
-Here is a simple example to get you started:
+Here is a simple example using simulated data to get you started:
 
 ```python
 from biolith.models import occu, simulate
@@ -36,6 +36,9 @@ results = fit(occu, **data)
 print(f"Mean estimated psi: {results.samples['psi'].mean():.2f}")
 print(f"Mean true occupancy: {true_params['z'].mean():.2f}")
 ```
+
+## Real-world Example
+To see a real-world example on camera trap data, see [this Jupyter Notebook](https://github.com/eco4cast/Statistical-Methods-Seminar-Series/tree/main/beery-haucke_biolith) from the EFI Statistical Methods Seminar Series or [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1828fk-7DEsDL9reK5oYSOrsYA68cim-W)
 
 ## License
 
