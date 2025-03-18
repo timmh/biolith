@@ -30,7 +30,7 @@ def dataframes_to_arrays(site_covs=None, obs_covs=None, obs=None, session_durati
 
 
 def rename_samples(samples, site_covs_names=None, obs_covs_names=None):
-    samples = copy.copy(samples)
+    samples = copy.deepcopy(samples)
     if site_covs_names is not None:
         for i in range(len(site_covs_names)):
             samples[f'cov_state_{site_covs_names[i]}'] = samples.pop(f'beta_{i}')
