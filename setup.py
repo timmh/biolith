@@ -19,12 +19,11 @@ setup(
         long_description_content_type="text/markdown",
         packages=find_packages(),
         install_requires=[
-            # TODO: specify versions
-            "numpy",
-            "pandas",
-            "jax",
-            "numpyro",
-            "funsor",  # currently required in order to do inference for models with discrete latent variables
+            "numpy==2.2.4",
+            "pandas==2.2.3",
+            "jax==0.5.2",
+            "numpyro==0.18.0",
+            "funsor==0.4.5",  # currently required in order to do inference for models with discrete latent variables
         ],
         license="MIT",
         keywords=['python', 'occupancy', 'numpyro', 'bayesian', 'ecology'],
