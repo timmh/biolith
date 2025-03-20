@@ -19,6 +19,7 @@ def fit(
         num_warmup=1000,
         random_seed=0,
         num_chains=5,
+        timeout=None,
         **kwargs,
     ):
 
@@ -31,7 +32,16 @@ def fit(
     mcmc = MCMC(kernel, num_samples=num_samples, num_warmup=num_warmup, num_chains=num_chains, chain_method='parallel' if num_chains <= jax.local_device_count() else 'sequential')
 
     arguments = dict(site_covs=site_covs, obs_covs=obs_covs, obs=obs, session_duration=session_duration)
-    mcmc.run(jax.random.PRNGKey(random_seed), **{k: v for k, v in arguments.items() if v is not None}, **kwargs)
+    valid_arguments = {k: v for k, v in arguments.items() if v is not None}
+    rng_key = jax.random.PRNGKey(random_seed)
+
+    if timeout is not None:
+        from .misc import time_limit
+        with time_limit(timeout):
+            mcmc.run(rng_key, **valid_arguments, **kwargs)
+    else:
+        mcmc.run(rng_key, **valid_arguments, **kwargs)
+    
     samples = mcmc.get_samples()
     samples = rename_samples(samples, site_covs_names, obs_covs_names)
 

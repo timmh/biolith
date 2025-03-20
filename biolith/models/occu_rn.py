@@ -139,7 +139,7 @@ class TestOccuRN(unittest.TestCase):
         data, true_params = simulate_rn(simulate_missing=True)
 
         from biolith.utils import fit
-        results = fit(occu_rn, **data)
+        results = fit(occu_rn, **data, timeout=600)
 
         self.assertTrue(np.allclose(results.samples["abundance"].mean(), true_params["abundance"].mean(), rtol=0.1))
         self.assertTrue(np.allclose([results.samples[k].mean() for k in [f"cov_state_{i}" for i in range(len(true_params["beta"]))]], true_params["beta"], atol=0.5))
