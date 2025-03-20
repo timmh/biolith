@@ -1,15 +1,21 @@
 import unittest
-from typing import Optional
-import pandas as pd
+from typing import Optional, List, Tuple
 import numpy as np
 import jax
 import jax.numpy as jnp
 import numpyro
 import numpyro.distributions as dist
-from numpyro.infer import MCMC, NUTS
 
 
-def occu_cs(site_covs: np.ndarray, obs_covs: np.ndarray, obs: Optional[np.ndarray] = None):
+def occu_cs(
+    site_covs: np.ndarray,
+    obs_covs: np.ndarray,
+    obs: Optional[np.ndarray] = None,
+    prior_beta: dist.Distribution | List[dist.Distribution] = dist.Normal(),
+    prior_alpha: dist.Distribution | List[dist.Distribution] = dist.Normal(),
+    prior_mu: dist.Distribution | Tuple[dist.Distribution] = dist.Normal(0, 10),
+    prior_sigma: dist.Distribution | Tuple[dist.Distribution] = dist.Gamma(5, 1),
+):
 
     # Check input data
     assert obs is None or obs.ndim == 2, "obs must be None or of shape (n_sites, time_periods)"
@@ -34,15 +40,18 @@ def occu_cs(site_covs: np.ndarray, obs_covs: np.ndarray, obs: Optional[np.ndarra
     site_covs = jnp.nan_to_num(site_covs)
     
     # Occupancy and detection covariates
-    beta = jnp.array([numpyro.sample(f'beta_{i}', dist.Normal()) for i in range(n_site_covs + 1)])
-    alpha = jnp.array([numpyro.sample(f'alpha_{i}', dist.Normal()) for i in range(n_obs_covs + 1)])
+    prior_betas = prior_beta if isinstance(prior_beta, list) else [prior_beta] * (n_site_covs + 1)
+    prior_alphas = prior_alpha if isinstance(prior_alpha, list) else [prior_alpha] * (n_obs_covs + 1)
+    beta = jnp.array([numpyro.sample(f'beta_{i}', prior_betas[i]) for i in range(n_site_covs + 1)])
+    alpha = jnp.array([numpyro.sample(f'alpha_{i}', prior_alphas[i]) for i in range(n_obs_covs + 1)])
 
     # Continuous score parameters
-    mu_dist = dist.Normal(0, 10)
-    mu0 = numpyro.sample('mu0', mu_dist)
-    mu1 = numpyro.sample('mu1', dist.TruncatedDistribution(mu_dist, low=mu0))
-    sigma0 = numpyro.sample('sigma0', dist.HalfNormal())
-    sigma1 = numpyro.sample('sigma1', dist.HalfNormal())
+    prior_mus = prior_mu if isinstance(prior_mu, tuple) else (prior_mu, prior_mu)
+    mu0 = numpyro.sample('mu0', prior_mus[0])
+    mu1 = numpyro.sample('mu1', dist.TruncatedDistribution(prior_mus[1], low=mu0))
+    prior_sigmas = prior_sigma if isinstance(prior_sigma, tuple) else (prior_sigma, prior_sigma)
+    sigma0 = numpyro.sample('sigma0', prior_sigmas[0])
+    sigma1 = numpyro.sample('sigma1', prior_sigmas[1])
 
     # Transpose in order to fit NumPyro's plate structure
     site_covs = site_covs.transpose((1, 0))
@@ -144,10 +153,7 @@ def simulate_cs(
 class TestOccuCS(unittest.TestCase):
 
     def test_occu(self):
-        data, true_params = simulate_cs(
-            simulate_missing=True,
-            n_sites=200,  # TODO: occupancy covariates fail to fit with fewer sites, investigate why
-        )
+        data, true_params = simulate_cs(simulate_missing=True)
 
         from biolith.utils import fit
         results = fit(occu_cs, **data, timeout=600)

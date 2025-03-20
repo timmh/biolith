@@ -1,10 +1,9 @@
 import unittest
 from typing import Optional, List
 import numpy as np
-import jax
-import jax.numpy as jnp
-import numpyro
-import numpyro.distributions as dist
+import torch
+import pyro
+import pyro.distributions as dist
 
 
 def occu(
@@ -12,9 +11,9 @@ def occu(
     obs_covs: np.ndarray,
     false_positives_constant: bool = False,
     false_positives_unoccupied: bool = False,
-    obs: Optional[jnp.ndarray] = None,
-    prior_beta: dist.Distribution | List[dist.Distribution] = dist.Normal(),
-    prior_alpha: dist.Distribution | List[dist.Distribution] = dist.Normal(),
+    obs: Optional[np.ndarray] = None,
+    prior_beta: dist.Distribution | List[dist.Distribution] = dist.Normal(0, 1),
+    prior_alpha: dist.Distribution | List[dist.Distribution] = dist.Normal(0, 1),
     prior_prob_fp_constant: dist.Distribution = dist.Beta(2, 5),
     prior_prob_fp_unoccupied: dist.Distribution = dist.Beta(2, 5),
 ):
@@ -38,46 +37,53 @@ def occu(
         assert n_sites == obs.shape[0], "obs must have n_sites rows"
         assert time_periods == obs.shape[1], "obs must have time_periods columns"
 
+    # Convert inputs to PyTorch tensors
+    site_covs_tensor = torch.tensor(site_covs, dtype=torch.float32)
+    obs_covs_tensor = torch.tensor(obs_covs, dtype=torch.float32)
+    obs_tensor = torch.tensor(obs, dtype=torch.float32) if obs is not None else None
+
     # Mask observations where covariates are missing
-    obs_mask = jnp.isnan(obs_covs).any(axis=-1) | jnp.tile(jnp.isnan(site_covs).any(axis=-1)[:, None], (1, time_periods))
-    obs = jnp.where(obs_mask, jnp.nan, obs) if obs is not None else None
-    obs_covs = jnp.nan_to_num(obs_covs)
-    site_covs = jnp.nan_to_num(site_covs)
+    obs_mask = torch.isnan(obs_covs_tensor).any(dim=-1) | torch.tile(torch.isnan(site_covs_tensor).any(dim=-1).unsqueeze(1), (1, time_periods))
+    obs_tensor = torch.where(obs_mask, torch.tensor(float('nan')), obs_tensor) if obs_tensor is not None else None
+    obs_covs_tensor = torch.nan_to_num(obs_covs_tensor)
+    site_covs_tensor = torch.nan_to_num(site_covs_tensor)
 
     # Priors
     # Model false positive rate for both occupied and unoccupied sites
-    prob_fp_constant = numpyro.sample('prob_fp_constant', prior_prob_fp_constant) if false_positives_constant else 0
+    prob_fp_constant = pyro.sample('prob_fp_constant', prior_prob_fp_constant) if false_positives_constant else torch.tensor(0.0)
     
     # Model false positive rate only for occupied sites
-    prob_fp_unoccupied = numpyro.sample('prob_fp_unoccupied', prior_prob_fp_unoccupied) if false_positives_unoccupied else 0
+    prob_fp_unoccupied = pyro.sample('prob_fp_unoccupied', prior_prob_fp_unoccupied) if false_positives_unoccupied else torch.tensor(0.0)
     
     # Occupancy and detection covariates
     prior_betas = prior_beta if isinstance(prior_beta, list) else [prior_beta] * (n_site_covs + 1)
     prior_alphas = prior_alpha if isinstance(prior_alpha, list) else [prior_alpha] * (n_obs_covs + 1)
-    beta = jnp.array([numpyro.sample(f'beta_{i}', prior_betas[i]) for i in range(n_site_covs + 1)])
-    alpha = jnp.array([numpyro.sample(f'alpha_{i}', prior_alphas[i]) for i in range(n_obs_covs + 1)])
+    beta = torch.stack([pyro.sample(f'beta_{i}', prior_betas[i]) for i in range(n_site_covs + 1)])
+    alpha = torch.stack([pyro.sample(f'alpha_{i}', prior_alphas[i]) for i in range(n_obs_covs + 1)])
 
-    # Transpose in order to fit NumPyro's plate structure
-    site_covs = site_covs.transpose((1, 0))
-    obs_covs = obs_covs.transpose((2, 1, 0))
-    obs = obs.transpose((1, 0)) if obs is not None else None
+    # Transpose in order to fit Pyro's plate structure
+    site_covs_tensor = site_covs_tensor.transpose(0, 1)
+    obs_covs_tensor = obs_covs_tensor.permute(2, 1, 0)
+    obs_tensor = obs_tensor.transpose(0, 1) if obs_tensor is not None else None
 
-    with numpyro.plate('site', n_sites, dim=-1):
-
+    with pyro.plate('site', n_sites, dim=-1):
         # Occupancy process
-        psi = numpyro.deterministic('psi', jax.nn.sigmoid(jnp.tile(beta[0], (n_sites,)) + jnp.sum(jnp.array([beta[i + 1] * site_covs[i, ...] for i in range(n_site_covs)]), axis=0)))
-        z = numpyro.sample('z', dist.Bernoulli(probs=psi), infer={'enumerate': 'parallel'})
+        psi = torch.sigmoid(torch.tile(beta[0], (n_sites,)) + torch.sum(torch.stack([beta[i + 1] * site_covs_tensor[i, ...] for i in range(n_site_covs)]), dim=0))
+        pyro.deterministic('psi', psi)
+        z = pyro.sample('z', dist.Bernoulli(probs=psi), infer={'enumerate': 'parallel'})
 
-        with numpyro.plate('time_periods', time_periods, dim=-2):
-
+        with pyro.plate('time_periods', time_periods, dim=-2):
             # Detection process
-            prob_detection = numpyro.deterministic(f'prob_detection', jax.nn.sigmoid(jnp.tile(alpha[0], (time_periods, n_sites)) + jnp.sum(jnp.array([alpha[i + 1] * obs_covs[i, ...] for i in range(n_obs_covs)]), axis=0)))
+            prob_detection = torch.sigmoid(torch.tile(alpha[0].unsqueeze(0), (time_periods, n_sites)) + 
+                             torch.sum(torch.stack([alpha[i + 1] * obs_covs_tensor[i, ...] for i in range(n_obs_covs)]), dim=0))
+            pyro.deterministic(f'prob_detection', prob_detection)
             p_det = z * prob_detection + (1 - z) * prob_fp_unoccupied + prob_fp_constant
-            p_det = jnp.clip(p_det, min=0, max=1)
+            p_det = torch.clamp(p_det, min=0, max=1)
 
-            if obs is not None:
-                with numpyro.handlers.mask(mask=jnp.isfinite(obs)):
-                    numpyro.sample(f'y', dist.Bernoulli(p_det), obs=jnp.nan_to_num(obs), infer={'enumerate': 'parallel'})
+            if obs_tensor is not None:
+                obs_mask = torch.isfinite(obs_tensor)
+                with pyro.poutine.mask(mask=obs_mask):
+                    pyro.sample(f'y', dist.Bernoulli(p_det), obs=torch.nan_to_num(obs_tensor), infer={'enumerate': 'parallel'})
 
 
 def simulate(
@@ -155,8 +161,8 @@ class TestOccu(unittest.TestCase):
     def test_occu(self):
         data, true_params = simulate(simulate_missing=True)
 
-        from biolith.utils import fit
-        results = fit(occu, **data, timeout=600)
+        from biolith.utils.fit_torch import fit_torch
+        results = fit_torch(occu, **data, timeout=600)
 
         self.assertTrue(np.allclose(results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1))
         self.assertTrue(np.allclose([results.samples[k].mean() for k in [f"cov_state_{i}" for i in range(len(true_params["beta"]))]], true_params["beta"], atol=0.5))

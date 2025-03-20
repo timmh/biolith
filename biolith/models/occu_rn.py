@@ -1,5 +1,5 @@
 import unittest
-from typing import Optional
+from typing import Optional, List
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -9,7 +9,16 @@ import numpyro.distributions as dist
 from biolith.utils.distributions import RightTruncatedPoisson
 
 
-def occu_rn(site_covs: np.ndarray, obs_covs: np.ndarray, false_positives_constant: bool = False, max_abundance: int = 100, obs: Optional[np.ndarray] = None):
+def occu_rn(
+    site_covs: np.ndarray,
+    obs_covs: np.ndarray,
+    false_positives_constant: bool = False,
+    max_abundance: int = 100,
+    obs: Optional[np.ndarray] = None,
+    prior_beta: dist.Distribution | List[dist.Distribution] = dist.Normal(),
+    prior_alpha: dist.Distribution | List[dist.Distribution] = dist.Normal(),
+    prior_prob_fp_constant: dist.Distribution = dist.Beta(2, 5),
+):
 
     # Check input data
     assert site_covs.ndim == 2, "site_covs must be (n_sites, n_site_covs)"
@@ -32,11 +41,13 @@ def occu_rn(site_covs: np.ndarray, obs_covs: np.ndarray, false_positives_constan
 
     # Priors
     # Model false positive rate for both occupied and unoccupied sites
-    prob_fp_constant = numpyro.sample('prob_fp_constant', dist.Beta(2, 5)) if false_positives_constant else 0
+    prob_fp_constant = numpyro.sample('prob_fp_constant', prior_prob_fp_constant) if false_positives_constant else 0
 
     # Abundance and detection covariates
-    beta = jnp.array([numpyro.sample(f'beta_{i}', dist.Normal()) for i in range(n_site_covs + 1)])
-    alpha = jnp.array([numpyro.sample(f'alpha_{i}', dist.Normal()) for i in range(n_obs_covs + 1)])
+    prior_betas = prior_beta if isinstance(prior_beta, list) else [prior_beta] * (n_site_covs + 1)
+    prior_alphas = prior_alpha if isinstance(prior_alpha, list) else [prior_alpha] * (n_obs_covs + 1)
+    beta = jnp.array([numpyro.sample(f'beta_{i}', prior_betas[i]) for i in range(n_site_covs + 1)])
+    alpha = jnp.array([numpyro.sample(f'alpha_{i}', prior_alphas[i]) for i in range(n_obs_covs + 1)])
 
     # Transpose in order to fit NumPyro's plate structure
     site_covs = site_covs.transpose((1, 0))

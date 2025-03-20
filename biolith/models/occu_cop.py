@@ -1,5 +1,5 @@
 import unittest
-from typing import Optional
+from typing import Optional, List
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -7,7 +7,18 @@ import numpyro
 import numpyro.distributions as dist
 
 
-def occu_cop(site_covs: np.ndarray, obs_covs: np.ndarray, session_duration: Optional[np.ndarray] = None, false_positives_constant: bool = False, false_positives_unoccupied: bool = False, obs: Optional[np.ndarray] = None):
+def occu_cop(
+    site_covs: np.ndarray,
+    obs_covs: np.ndarray,
+    session_duration: Optional[np.ndarray] = None,
+    false_positives_constant: bool = False,
+    false_positives_unoccupied: bool = False,
+    obs: Optional[np.ndarray] = None,
+    prior_beta: dist.Distribution | List[dist.Distribution] = dist.Normal(),
+    prior_alpha: dist.Distribution | List[dist.Distribution] = dist.Normal(),
+    prior_rate_fp_constant: dist.Distribution = dist.Exponential(),
+    prior_rate_fp_unoccupied: dist.Distribution = dist.Exponential(),
+):
 
     # Check input data
     assert obs is None or obs.ndim == 2, "obs must be None or of shape (n_sites, time_periods)"
@@ -38,14 +49,16 @@ def occu_cop(site_covs: np.ndarray, obs_covs: np.ndarray, session_duration: Opti
     site_covs = jnp.nan_to_num(site_covs)
 
     # Model false positive rate for both occupied and unoccupied sites
-    rate_fp_constant = numpyro.sample('rate_fp_constant', dist.Exponential()) if false_positives_constant else 0
+    rate_fp_constant = numpyro.sample('rate_fp_constant', prior_rate_fp_constant) if false_positives_constant else 0
     
     # Model false positive rate only for occupied sites
-    rate_fp_unoccupied = numpyro.sample('rate_fp_unoccupied', dist.Exponential()) if false_positives_unoccupied else 0
+    rate_fp_unoccupied = numpyro.sample('rate_fp_unoccupied', prior_rate_fp_unoccupied) if false_positives_unoccupied else 0
     
     # Occupancy and detection covariates
-    beta = jnp.array([numpyro.sample(f'beta_{i}', dist.Normal()) for i in range(n_site_covs + 1)])
-    alpha = jnp.array([numpyro.sample(f'alpha_{i}', dist.Normal()) for i in range(n_obs_covs + 1)])
+    prior_betas = prior_beta if isinstance(prior_beta, list) else [prior_beta] * (n_site_covs + 1)
+    prior_alphas = prior_alpha if isinstance(prior_alpha, list) else [prior_alpha] * (n_obs_covs + 1)
+    beta = jnp.array([numpyro.sample(f'beta_{i}', prior_betas[i]) for i in range(n_site_covs + 1)])
+    alpha = jnp.array([numpyro.sample(f'alpha_{i}', prior_alphas[i]) for i in range(n_obs_covs + 1)])
 
     # Transpose in order to fit NumPyro's plate structure
     site_covs = site_covs.transpose((1, 0))
