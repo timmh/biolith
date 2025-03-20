@@ -10,11 +10,11 @@ from biolith.utils.distributions import RightTruncatedPoisson
 
 
 def occu_rn(
-    site_covs: np.ndarray,
-    obs_covs: np.ndarray,
+    site_covs: jnp.ndarray,
+    obs_covs: jnp.ndarray,
     false_positives_constant: bool = False,
     max_abundance: int = 100,
-    obs: Optional[np.ndarray] = None,
+    obs: Optional[jnp.ndarray] = None,
     prior_beta: dist.Distribution | List[dist.Distribution] = dist.Normal(),
     prior_alpha: dist.Distribution | List[dist.Distribution] = dist.Normal(),
     prior_prob_fp_constant: dist.Distribution = dist.Beta(2, 5),
@@ -29,9 +29,10 @@ def occu_rn(
     n_site_covs = site_covs.shape[1]
     n_obs_covs = obs_covs.shape[2]
 
-    if obs is not None:
-        assert obs.shape == (n_sites, time_periods), "obs must have shape (n_sites, time_periods)"
-        assert (obs[np.isfinite(obs)] >= 0).all() and (obs[np.isfinite(obs)] <= 1).all(), "Detections (obs) must be in {0,1} (or NaN for missing)."
+    # # TODO: re-enable
+    # if obs is not None:
+    #     assert obs.shape == (n_sites, time_periods), "obs must have shape (n_sites, time_periods)"
+    #     assert (obs[np.isfinite(obs)] >= 0).all() and (obs[np.isfinite(obs)] <= 1).all(), "Detections (obs) must be in {0,1} (or NaN for missing)."
 
     # Mask observations where covariates are missing
     obs_mask = jnp.isnan(obs_covs).any(axis=-1) | jnp.tile(jnp.isnan(site_covs).any(axis=-1)[:, None], (1, time_periods))

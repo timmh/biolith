@@ -1,5 +1,6 @@
 import copy
 import pandas as pd
+import jax.numpy as jnp
 
 
 def dataframes_to_arrays(site_covs=None, obs_covs=None, obs=None, session_duration=None):
@@ -25,6 +26,11 @@ def dataframes_to_arrays(site_covs=None, obs_covs=None, obs=None, session_durati
         site_covs_names = [str(0)] + [str(i + 1) for i in range(site_covs.shape[1])]
     if obs_covs_names is None and obs_covs is not None:
         obs_covs_names = [str(0)] + [str(i + 1) for i in range(obs_covs.shape[2])]
+
+    site_covs = jnp.array(site_covs) if site_covs is not None else None
+    obs_covs = jnp.array(obs_covs) if obs_covs is not None else None
+    obs = jnp.array(obs) if obs is not None else None
+    session_duration = jnp.array(session_duration) if session_duration is not None else None
 
     return site_covs, obs_covs, obs, session_duration, site_covs_names, obs_covs_names
 

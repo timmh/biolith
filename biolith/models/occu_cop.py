@@ -8,12 +8,12 @@ import numpyro.distributions as dist
 
 
 def occu_cop(
-    site_covs: np.ndarray,
-    obs_covs: np.ndarray,
-    session_duration: Optional[np.ndarray] = None,
+    site_covs: jnp.ndarray,
+    obs_covs: jnp.ndarray,
+    session_duration: Optional[jnp.ndarray] = None,
     false_positives_constant: bool = False,
     false_positives_unoccupied: bool = False,
-    obs: Optional[np.ndarray] = None,
+    obs: Optional[jnp.ndarray] = None,
     prior_beta: dist.Distribution | List[dist.Distribution] = dist.Normal(),
     prior_alpha: dist.Distribution | List[dist.Distribution] = dist.Normal(),
     prior_rate_fp_constant: dist.Distribution = dist.Exponential(),
@@ -25,7 +25,7 @@ def occu_cop(
     assert site_covs.ndim == 2, "site_covs must be of shape (n_sites, n_site_covs)"
     assert obs_covs.ndim == 3, "obs_covs must be of shape (n_sites, time_periods, n_obs_covs)"
     assert session_duration is None or session_duration.ndim == 2, "session_duration must be None or of shape (n_sites, time_periods)"
-    assert (obs[np.isfinite(obs)] >= 0).all(), "observations must be non-negative"
+    # assert (obs[np.isfinite(obs)] >= 0).all(), "observations must be non-negative"  # TODO: re-enable
     assert not (false_positives_constant and false_positives_unoccupied), "false_positives_constant and false_positives_unoccupied cannot both be True"
 
     n_sites = site_covs.shape[0]

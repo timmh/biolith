@@ -8,9 +8,9 @@ import numpyro.distributions as dist
 
 
 def occu_cs(
-    site_covs: np.ndarray,
-    obs_covs: np.ndarray,
-    obs: Optional[np.ndarray] = None,
+    site_covs: jnp.ndarray,
+    obs_covs: jnp.ndarray,
+    obs: Optional[jnp.ndarray] = None,
     prior_beta: dist.Distribution | List[dist.Distribution] = dist.Normal(),
     prior_alpha: dist.Distribution | List[dist.Distribution] = dist.Normal(),
     prior_mu: dist.Distribution | Tuple[dist.Distribution] = dist.Normal(0, 10),

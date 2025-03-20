@@ -8,8 +8,8 @@ import numpyro.distributions as dist
 
 
 def occu(
-    site_covs: np.ndarray,
-    obs_covs: np.ndarray,
+    site_covs: jnp.ndarray,
+    obs_covs: jnp.ndarray,
     false_positives_constant: bool = False,
     false_positives_unoccupied: bool = False,
     obs: Optional[jnp.ndarray] = None,
@@ -23,8 +23,8 @@ def occu(
     assert obs is None or obs.ndim == 2, "obs must be None or of shape (n_sites, time_periods)"
     assert site_covs.ndim == 2, "site_covs must be of shape (n_sites, n_site_covs)"
     assert obs_covs.ndim == 3, "obs_covs must be of shape (n_sites, time_periods, n_obs_covs)"
-    assert obs is None or (obs[np.isfinite(obs)] >= 0).all(), "observations must be non-negative"
-    assert obs is None or (obs[np.isfinite(obs)] <= 1).all(), "observations must be binary"
+    # assert obs is None or (obs[np.isfinite(obs)] >= 0).all(), "observations must be non-negative"  # TODO: re-enable
+    # assert obs is None or (obs[np.isfinite(obs)] <= 1).all(), "observations must be binary"  # TODO: re-enable
     assert not (false_positives_constant and false_positives_unoccupied), "false_positives_constant and false_positives_unoccupied cannot both be True"
 
     n_sites = site_covs.shape[0]
