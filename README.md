@@ -15,7 +15,7 @@ Biolith is a Python package designed for bayesian ecological modeling and analys
 You can install Biolith using pip:
 
 ```bash
-pip install git+https://github.com/timmh/biolith
+pip install biolith
 ```
 
 ## Usage
