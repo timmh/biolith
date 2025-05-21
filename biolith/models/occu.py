@@ -162,6 +162,99 @@ class TestOccu(unittest.TestCase):
         self.assertTrue(np.allclose([results.samples[k].mean() for k in [f"cov_state_{i}" for i in range(len(true_params["beta"]))]], true_params["beta"], atol=0.5))
         self.assertTrue(np.allclose([results.samples[k].mean() for k in [f"cov_det_{i}" for i in range(len(true_params["alpha"]))]], true_params["alpha"], atol=0.5))
 
+    def test_vs_spoccupancy(self):
+        data, true_params = simulate(simulate_missing=True)
+
+        num_samples = 1000
+
+        # fit the biolith model
+        from biolith.utils import fit
+        from rpy2.robjects.packages import importr
+        results = fit(occu, **data, timeout=600, num_chains=1, num_samples=num_samples, num_warmup=100)
+
+        # fit the spOccupancy model
+        import rpy2.robjects as ro
+        import rpy2.robjects.numpy2ri as numpy2ri_module
+
+        # Import R packages
+        base_r = importr('base')
+        stats_r = importr('stats')
+        spOccupancy_r = importr('spOccupancy')
+
+        # Prepare data for R
+        # Observations (y) - can have NaNs, spOccupancy handles them.
+        y_py = data["obs"].copy()  # Shape: (n_sites, time_periods)
+        y_r = numpy2ri_module.py2rpy(y_py) # Converts to R matrix, np.nan to R NA
+
+        # Occupancy covariates (site-level)
+        # Replace NaNs with 0, as spOccupancy expects complete covariate data.
+        occ_covs_py = np.nan_to_num(data["site_covs"].copy()) # Shape: (n_sites, n_site_covs)
+        n_sites, n_site_covs = occ_covs_py.shape
+        
+        occ_covs_r_elements = {}
+        occ_formula_parts = []
+        if n_site_covs > 0:
+            for i in range(n_site_covs):
+                cov_name = f"site_cov{i+1}"
+                occ_covs_r_elements[cov_name] = numpy2ri_module.py2rpy(occ_covs_py[:, i])
+                occ_formula_parts.append(cov_name)
+        occ_covs_r_df = ro.DataFrame(occ_covs_r_elements) # R DataFrame
+        occ_formula_str = "~ " + " + ".join(occ_formula_parts) if occ_formula_parts else "~ 1"
+
+        # Detection covariates (observation-level)
+        # Replace NaNs with 0.
+        det_covs_py = np.nan_to_num(data["obs_covs"].copy()) # Shape: (n_sites, time_periods, n_obs_covs)
+        _, time_periods, n_obs_covs = det_covs_py.shape
+
+        det_covs_r_elements = {} # For the R named list
+        det_formula_parts = []
+        if n_obs_covs > 0:
+            for i in range(n_obs_covs):
+                cov_name = f"obs_cov{i+1}"
+                # Convert each (n_sites, time_periods) slice to an R matrix
+                det_covs_r_elements[cov_name] = numpy2ri_module.py2rpy(det_covs_py[:, :, i])
+                det_formula_parts.append(cov_name)
+        det_covs_r_list = ro.ListVector(det_covs_r_elements) # R named list
+        det_formula_str = "~ " + " + ".join(det_formula_parts) if det_formula_parts else "~ 1"
+
+        # Consolidate data into an R list for spOccupancy
+        sp_data_r = ro.ListVector({
+            "y": y_r,
+            "occ.covs": occ_covs_r_df,
+            "det.covs": det_covs_r_list
+        })
+
+        # Priors: Normal(0,1) for regression coefficients to match biolith's default
+        n_beta_params = n_site_covs + 1  # site covariates + intercept
+        n_alpha_params = n_obs_covs + 1 # observation covariates + intercept
+        
+        priors_list_r = ro.ListVector({
+                "beta.normal": ro.ListVector({
+                "mean": base_r.rep(0, n_beta_params),
+                "var": base_r.rep(1, n_beta_params),
+            }),
+                "alpha.normal": ro.ListVector({
+                "mean": base_r.rep(0, n_alpha_params),
+                "var": base_r.rep(1, n_alpha_params),
+            }),
+        })
+
+        pg_occ_results_r = spOccupancy_r.PGOcc(
+            occ_formula=stats_r.as_formula(occ_formula_str),
+            det_formula=stats_r.as_formula(det_formula_str),
+            data=sp_data_r,
+            priors=priors_list_r,
+            n_samples=num_samples,
+        )
+
+        beta_samples_r_matrix = numpy2ri_module.rpy2py(pg_occ_results_r.rx2('beta.samples'))
+        alpha_samples_r_matrix = numpy2ri_module.rpy2py(pg_occ_results_r.rx2('alpha.samples'))
+        psi_samples_r_matrix = numpy2ri_module.rpy2py(pg_occ_results_r.rx2('psi.samples'))
+
+        self.assertTrue(np.allclose(psi_samples_r_matrix.mean(), results.samples["psi"].mean(), atol=0.1))
+        self.assertTrue(np.allclose(beta_samples_r_matrix.mean(axis=0), [results.samples[k].mean() for k in [f"cov_state_{i}" for i in range(len(true_params["beta"]))]], atol=0.5))
+        self.assertTrue(np.allclose(alpha_samples_r_matrix.mean(axis=0), [results.samples[k].mean() for k in [f"cov_det_{i}" for i in range(len(true_params["alpha"]))]], atol=0.5))
+
 
 if __name__ == '__main__':
     unittest.main()
