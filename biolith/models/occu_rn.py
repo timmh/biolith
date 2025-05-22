@@ -70,7 +70,9 @@ def occu_rn(
 
             if obs is not None:
                 with numpyro.handlers.mask(mask=jnp.isfinite(obs)):
-                    numpyro.sample("y", dist.Bernoulli(jnp.clip(p_it + prob_fp_constant, 0, 1)), obs=jnp.nan_to_num(obs), infer={'enumerate': 'parallel'})
+                    numpyro.sample("y", dist.Bernoulli(1 - (1 - p_it) * (1 - prob_fp_constant)), obs=jnp.nan_to_num(obs), infer={'enumerate': 'parallel'})
+            else:
+                numpyro.sample("y", dist.Bernoulli(1 - (1 - p_it) * (1 - prob_fp_constant)), infer={'enumerate': 'parallel'})
 
 
 def simulate_rn(
@@ -119,7 +121,7 @@ def simulate_rn(
             # Note this is different than how we think about false positives being a random occurrence per image.
             # For now, this is generating positive/negative per time period, which is different than per image.
             p_it = 1.0 - (1.0 - r_it[i])**N_i[i]
-            obs[i, :] = rng.binomial(n=1, p=np.clip(p_it + prob_fp, 0, 1), size=time_periods)
+            obs[i, :] = rng.binomial(n=1, p=1 - (1 - p_it) * (1 - prob_fp), size=time_periods)
 
         # Convert counts into observed occupancy
         obs = (obs >= 1) * 1.

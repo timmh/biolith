@@ -72,6 +72,8 @@ def occu_cs(
             if obs is not None:
                 with numpyro.handlers.mask(mask=jnp.isfinite(obs)):
                     numpyro.sample('s', dist.Normal((1 - f) * mu0 + f * mu1, (1 - f) * sigma0 + f * sigma1), obs=jnp.nan_to_num(obs))
+            else:
+                numpyro.sample('s', dist.Normal((1 - f) * mu0 + f * mu1, (1 - f) * sigma0 + f * sigma1))
 
 
 def simulate_cs(

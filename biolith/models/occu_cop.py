@@ -81,6 +81,8 @@ def occu_cop(
             if obs is not None:
                 with numpyro.handlers.mask(mask=jnp.isfinite(obs)):
                     numpyro.sample(f'y', dist.Poisson(jnp.nan_to_num(session_duration * l_det)), obs=jnp.nan_to_num(obs))
+            else:
+                numpyro.sample(f'y', dist.Poisson(jnp.nan_to_num(session_duration * l_det)))
 
 
 def simulate_cop(

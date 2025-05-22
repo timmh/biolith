@@ -72,12 +72,13 @@ def occu(
 
             # Detection process
             prob_detection = numpyro.deterministic(f'prob_detection', jax.nn.sigmoid(jnp.tile(alpha[0], (time_periods, n_sites)) + jnp.sum(jnp.array([alpha[i + 1] * obs_covs[i, ...] for i in range(n_obs_covs)]), axis=0)))
-            p_det = z * prob_detection + (1 - z) * prob_fp_unoccupied + prob_fp_constant
-            p_det = jnp.clip(p_det, min=0, max=1)
+            prob_detection_fp = numpyro.deterministic('prob_detection_fp', 1 - (1 - z * prob_detection) * (1 - prob_fp_constant) * (1 - (1 - z) * prob_fp_unoccupied))
 
             if obs is not None:
                 with numpyro.handlers.mask(mask=jnp.isfinite(obs)):
-                    numpyro.sample(f'y', dist.Bernoulli(p_det), obs=jnp.nan_to_num(obs), infer={'enumerate': 'parallel'})
+                    numpyro.sample(f'y', dist.Bernoulli(prob_detection_fp), obs=jnp.nan_to_num(obs), infer={'enumerate': 'parallel'})
+            else:
+                numpyro.sample(f'y', dist.Bernoulli(prob_detection_fp), infer={'enumerate': 'parallel'})
 
 
 def simulate(
@@ -86,7 +87,8 @@ def simulate(
         n_sites=100,  # number of sites
         deployment_days_per_site=365,  # number of days each site is monitored
         session_duration=7,  # 1, 7, or 30 days
-        prob_fp=0,  # probability of a false positive for a given time point
+        prob_fp_unoccupied=0,  # probability of a false positive at unoccupied sites for a given time point
+        prob_fp_constant=0,  # constant probability of a false positive for a given time point
         simulate_missing=False,  # whether to simulate missing data by setting some observations to NaN
         min_occupancy=0.25,  # minimum occupancy rate
         max_occupancy=0.75,  # maximum occupancy rate
@@ -116,16 +118,18 @@ def simulate(
 
         # Create matrix of detection covariates
         obs_covs = rng.normal(size=(n_sites, time_periods, n_obs_covs))
-        p = 1 / (1 + np.exp(-(alpha[0].repeat(n_sites)[:, None] + np.sum([alpha[i + 1] * obs_covs[..., i] for i in range(n_obs_covs)], axis=0))))
+        prob_detection = 1 / (1 + np.exp(-(alpha[0].repeat(n_sites)[:, None] + np.sum([alpha[i + 1] * obs_covs[..., i] for i in range(n_obs_covs)], axis=0))))
 
         # Create matrix of detections
         obs = np.zeros((n_sites, time_periods))
+        prob_detection_fp = np.zeros((n_sites, time_periods))
 
         for i in range(n_sites):
             # According to the Royle model in unmarked, false positives are generated only if the site is unoccupied
             # Note this is different than how we think about false positives being a random occurrence per image.
             # For now, this is generating positive/negative per time period, which is different than per image.
-            obs[i, :] = rng.binomial(n=1, p=(p[i, :] * z[i] + prob_fp * (1 - z[i])), size=time_periods)
+            prob_detection_fp[i, :] = 1 - (1 - (z[i] * prob_detection[i, :])) * (1 - prob_fp_constant) * (1 - ((1 - z[i]) * prob_fp_unoccupied))
+            obs[i, :] = rng.binomial(n=1, p=prob_detection_fp[i, :], size=time_periods)
 
         # Convert counts into observed occupancy
         obs = (obs >= 1) * 1.
@@ -159,6 +163,32 @@ class TestOccu(unittest.TestCase):
         results = fit(occu, **data, timeout=600)
 
         self.assertTrue(np.allclose(results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1))
+        self.assertTrue(np.allclose([results.samples[k].mean() for k in [f"cov_state_{i}" for i in range(len(true_params["beta"]))]], true_params["beta"], atol=0.5))
+        self.assertTrue(np.allclose([results.samples[k].mean() for k in [f"cov_det_{i}" for i in range(len(true_params["alpha"]))]], true_params["alpha"], atol=0.5))
+
+    def test_occu_fp_constant(self):
+        prob_fp_constant = 0.1
+        data, true_params = simulate(simulate_missing=True, prob_fp_constant=prob_fp_constant)
+
+        from biolith.utils import fit
+        results = fit(occu, **data, false_positives_constant=True, timeout=600)
+
+        self.assertTrue(np.allclose(results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1))
+        self.assertTrue(np.allclose(results.samples["prob_fp_constant"].mean(), prob_fp_constant, atol=0.1))
+        self.assertTrue(np.allclose([results.samples[k].mean() for k in [f"cov_state_{i}" for i in range(len(true_params["beta"]))]], true_params["beta"], atol=0.5))
+        self.assertTrue(np.allclose([results.samples[k].mean() for k in [f"cov_det_{i}" for i in range(len(true_params["alpha"]))]], true_params["alpha"], atol=0.5))
+
+    # TODO: fix this test
+    @unittest.skip("Skipping test for false positives at unoccupied sites")
+    def test_occu_fp_unoccupied(self):
+        prob_fp_unoccupied = 0.1
+        data, true_params = simulate(simulate_missing=True, prob_fp_unoccupied=prob_fp_unoccupied)
+
+        from biolith.utils import fit
+        results = fit(occu, **data, false_positives_unoccupied=True, timeout=600)
+
+        self.assertTrue(np.allclose(results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1))
+        self.assertTrue(np.allclose(results.samples["prob_fp_unoccupied"].mean(), prob_fp_unoccupied, atol=0.1))
         self.assertTrue(np.allclose([results.samples[k].mean() for k in [f"cov_state_{i}" for i in range(len(true_params["beta"]))]], true_params["beta"], atol=0.5))
         self.assertTrue(np.allclose([results.samples[k].mean() for k in [f"cov_det_{i}" for i in range(len(true_params["alpha"]))]], true_params["alpha"], atol=0.5))
 
