@@ -5,11 +5,14 @@ import jax
 import jax.numpy as jnp
 import numpyro
 import numpyro.distributions as dist
+from biolith.utils.spatial import sample_spatial_effects, simulate_spatial_effects
 
 
 def occu_cop(
     site_covs: jnp.ndarray,
     obs_covs: jnp.ndarray,
+    coords: Optional[jnp.ndarray] = None,
+    ell: float = 1.0,
     session_duration: Optional[jnp.ndarray] = None,
     false_positives_constant: bool = False,
     false_positives_unoccupied: bool = False,
@@ -18,6 +21,8 @@ def occu_cop(
     prior_alpha: dist.Distribution | List[dist.Distribution] = dist.Normal(),
     prior_rate_fp_constant: dist.Distribution = dist.Exponential(),
     prior_rate_fp_unoccupied: dist.Distribution = dist.Exponential(),
+    prior_gp_sd: dist.Distribution = dist.HalfNormal(1.0),
+    prior_gp_length: dist.Distribution = dist.HalfNormal(1.0),
 ):
 
     # Check input data
@@ -60,6 +65,16 @@ def occu_cop(
     beta = jnp.array([numpyro.sample(f'beta_{i}', prior_betas[i]) for i in range(n_site_covs + 1)])
     alpha = jnp.array([numpyro.sample(f'alpha_{i}', prior_alphas[i]) for i in range(n_obs_covs + 1)])
 
+    if coords is not None:
+        w = sample_spatial_effects(
+            coords,
+            ell=ell,
+            prior_gp_sd=prior_gp_sd,
+            prior_gp_length=prior_gp_length,
+        )
+    else:
+        w = jnp.zeros(n_sites)
+
     # Transpose in order to fit NumPyro's plate structure
     site_covs = site_covs.transpose((1, 0))
     obs_covs = obs_covs.transpose((2, 1, 0))
@@ -69,7 +84,7 @@ def occu_cop(
     with numpyro.plate('site', n_sites, dim=-1):
 
         # Occupancy process
-        psi = numpyro.deterministic('psi', jax.nn.sigmoid(jnp.tile(beta[0], (n_sites,)) + jnp.sum(jnp.array([beta[i + 1] * site_covs[i, ...] for i in range(n_site_covs)]), axis=0)))
+        psi = numpyro.deterministic("psi", jax.nn.sigmoid(jnp.tile(beta[0], (n_sites,)) + jnp.sum(jnp.array([beta[i + 1] * site_covs[i, ...] for i in range(n_site_covs)]), axis=0) + w))
         z = numpyro.sample('z', dist.Bernoulli(probs=psi), infer={'enumerate': 'parallel'})
 
         with numpyro.plate('time_periods', time_periods, dim=-2):
@@ -97,10 +112,17 @@ def simulate_cop(
         min_observation_rate=0.5,  # minimum proportion of timesteps with observation
         max_observation_rate=10,  # maximum proportion of timesteps with observation
         random_seed=0,
+        spatial: bool = False,
+        gp_sd: float = 1.0,
+        gp_l: float = 0.2,
 ):
 
     # Initialize random number generator
     rng = np.random.default_rng(random_seed)
+    if spatial:
+        coords = rng.uniform(0, 1, size=(n_sites, 2))
+    else:
+        coords = None
 
     # Make sure occupancy and detection are not too close to 0 or 1
     z = None
@@ -115,7 +137,11 @@ def simulate_cop(
 
         # Generate occupancy and site-level covariates
         site_covs = rng.normal(size=(n_sites, n_site_covs))
-        psi = 1 / (1 + np.exp(-(beta[0].repeat(n_sites) + np.sum([beta[i + 1] * site_covs[..., i] for i in range(n_site_covs)], axis=0))))
+        if spatial:
+            w, ell = simulate_spatial_effects(coords, gp_sd=gp_sd, gp_l=gp_l, rng=rng)
+        else:
+            w, ell = np.zeros(n_sites), 0.0
+        psi = 1 / (1 + np.exp(-(beta[0].repeat(n_sites) + np.sum([beta[i + 1] * site_covs[..., i] for i in range(n_site_covs)], axis=0) + w)))
         z = rng.binomial(n=1, p=psi, size=n_sites)  # vector of latent occupancy status for each site
 
         # Generate detection data
@@ -152,10 +178,15 @@ def simulate_cop(
         session_duration=session_duration,
         obs=obs,
         false_positives_constant=True,
+        coords=coords,
+        ell=ell,
     ), dict(
         z=z,
         beta=beta,
         alpha=alpha,
+        w=w,
+        gp_sd=gp_sd,
+        gp_l=gp_l,
     )
 
 
@@ -170,6 +201,16 @@ class TestOccuCOP(unittest.TestCase):
         self.assertTrue(np.allclose(results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1))
         self.assertTrue(np.allclose([results.samples[k].mean() for k in [f"cov_state_{i}" for i in range(len(true_params["beta"]))]], true_params["beta"], atol=0.5))
         self.assertTrue(np.allclose([results.samples[k].mean() for k in [f"cov_det_{i}" for i in range(len(true_params["alpha"]))]], true_params["alpha"], atol=0.5))
+
+    def test_occu_spatial(self):
+        data, true_params = simulate_cop(simulate_missing=True, spatial=True)
+
+        from biolith.utils import fit
+        results = fit(occu_cop, **data, timeout=600)
+
+        self.assertTrue(np.allclose(results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1))
+        self.assertTrue(np.allclose(results.samples["gp_sd"].mean(), true_params["gp_sd"], atol=1.0))
+        self.assertTrue(np.allclose(results.samples["gp_l"].mean(), true_params["gp_l"], atol=0.1))
 
 
 if __name__ == '__main__':

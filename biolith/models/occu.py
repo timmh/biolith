@@ -5,11 +5,14 @@ import jax
 import jax.numpy as jnp
 import numpyro
 import numpyro.distributions as dist
+from biolith.utils.spatial import sample_spatial_effects, simulate_spatial_effects
 
 
 def occu(
     site_covs: jnp.ndarray,
     obs_covs: jnp.ndarray,
+    coords: Optional[jnp.ndarray] = None,
+    ell: float = 1.0,
     false_positives_constant: bool = False,
     false_positives_unoccupied: bool = False,
     obs: Optional[jnp.ndarray] = None,
@@ -17,6 +20,8 @@ def occu(
     prior_alpha: dist.Distribution | List[dist.Distribution] = dist.Normal(),
     prior_prob_fp_constant: dist.Distribution = dist.Beta(2, 5),
     prior_prob_fp_unoccupied: dist.Distribution = dist.Beta(2, 5),
+    prior_gp_sd: dist.Distribution = dist.HalfNormal(1.0),
+    prior_gp_length: dist.Distribution = dist.HalfNormal(1.0),
 ):
 
     # Check input data
@@ -50,12 +55,22 @@ def occu(
     
     # Model false positive rate only for occupied sites
     prob_fp_unoccupied = numpyro.sample('prob_fp_unoccupied', prior_prob_fp_unoccupied) if false_positives_unoccupied else 0
-    
+
     # Occupancy and detection covariates
     prior_betas = prior_beta if isinstance(prior_beta, list) else [prior_beta] * (n_site_covs + 1)
     prior_alphas = prior_alpha if isinstance(prior_alpha, list) else [prior_alpha] * (n_obs_covs + 1)
     beta = jnp.array([numpyro.sample(f'beta_{i}', prior_betas[i]) for i in range(n_site_covs + 1)])
     alpha = jnp.array([numpyro.sample(f'alpha_{i}', prior_alphas[i]) for i in range(n_obs_covs + 1)])
+
+    if coords is not None:
+        w = sample_spatial_effects(
+            coords,
+            ell=ell,
+            prior_gp_sd=prior_gp_sd,
+            prior_gp_length=prior_gp_length,
+        )
+    else:
+        w = jnp.zeros(n_sites)
 
     # Transpose in order to fit NumPyro's plate structure
     site_covs = site_covs.transpose((1, 0))
@@ -65,7 +80,7 @@ def occu(
     with numpyro.plate('site', n_sites, dim=-1):
 
         # Occupancy process
-        psi = numpyro.deterministic('psi', jax.nn.sigmoid(jnp.tile(beta[0], (n_sites,)) + jnp.sum(jnp.array([beta[i + 1] * site_covs[i, ...] for i in range(n_site_covs)]), axis=0)))
+        psi = numpyro.deterministic("psi", jax.nn.sigmoid(jnp.tile(beta[0], (n_sites,)) + jnp.sum(jnp.array([beta[i + 1] * site_covs[i, ...] for i in range(n_site_covs)]), axis=0) + w))
         z = numpyro.sample('z', dist.Bernoulli(probs=psi), infer={'enumerate': 'parallel'})
 
         with numpyro.plate('time_periods', time_periods, dim=-2):
@@ -95,10 +110,17 @@ def simulate(
         min_observation_rate=0.1,  # minimum proportion of timesteps with observation
         max_observation_rate=0.5,  # maximum proportion of timesteps with observation
         random_seed=0,
+        spatial: bool = False,
+        gp_sd: float = 1.0,
+        gp_l: float = 0.2,
 ):
 
     # Initialize random number generator
     rng = np.random.default_rng(random_seed)
+    if spatial:
+        coords = rng.uniform(0, 1, size=(n_sites, 2))
+    else:
+        coords = None
 
     # Make sure occupancy and detection are not too close to 0 or 1
     z = None
@@ -110,7 +132,11 @@ def simulate(
 
         # Generate occupancy and site-level covariates
         site_covs = rng.normal(size=(n_sites, n_site_covs))
-        psi = 1 / (1 + np.exp(-(beta[0].repeat(n_sites) + np.sum([beta[i + 1] * site_covs[..., i] for i in range(n_site_covs)], axis=0))))
+        if spatial:
+            w, ell = simulate_spatial_effects(coords, gp_sd=gp_sd, gp_l=gp_l, rng=rng)
+        else:
+            w, ell = np.zeros(n_sites), 0.0
+        psi = 1 / (1 + np.exp(-(beta[0].repeat(n_sites) + np.sum([beta[i + 1] * site_covs[..., i] for i in range(n_site_covs)], axis=0) + w)))
         z = rng.binomial(n=1, p=psi, size=n_sites)  # vector of latent occupancy status for each site
 
         # Generate detection data
@@ -147,10 +173,15 @@ def simulate(
         site_covs=site_covs,
         obs_covs=obs_covs,
         obs=obs,
+        coords=coords,
+        ell=ell,
     ), dict(
         z=z,
         beta=beta,
         alpha=alpha,
+        w=w,
+        gp_sd=gp_sd,
+        gp_l=gp_l,
     )
 
 
@@ -191,6 +222,16 @@ class TestOccu(unittest.TestCase):
         self.assertTrue(np.allclose(results.samples["prob_fp_unoccupied"].mean(), prob_fp_unoccupied, atol=0.1))
         self.assertTrue(np.allclose([results.samples[k].mean() for k in [f"cov_state_{i}" for i in range(len(true_params["beta"]))]], true_params["beta"], atol=0.5))
         self.assertTrue(np.allclose([results.samples[k].mean() for k in [f"cov_det_{i}" for i in range(len(true_params["alpha"]))]], true_params["alpha"], atol=0.5))
+
+    def test_occu_spatial(self):
+        data, true_params = simulate(simulate_missing=True, spatial=True)
+
+        from biolith.utils import fit
+        results = fit(occu, **data, timeout=600)
+
+        self.assertTrue(np.allclose(results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1))
+        self.assertTrue(np.allclose(results.samples["gp_sd"].mean(), true_params["gp_sd"], atol=1.0))
+        self.assertTrue(np.allclose(results.samples["gp_l"].mean(), true_params["gp_l"], atol=0.1))
 
     def test_vs_spoccupancy(self):
         data, true_params = simulate(simulate_missing=True)
