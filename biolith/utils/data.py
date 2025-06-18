@@ -36,11 +36,13 @@ def dataframes_to_arrays(site_covs=None, obs_covs=None, obs=None, session_durati
 
 
 def rename_samples(samples, site_covs_names=None, obs_covs_names=None):
-    samples = copy.deepcopy(samples)
+    samples = copy.copy(samples)
     if site_covs_names is not None:
         for i in range(len(site_covs_names)):
-            samples[f'cov_state_{site_covs_names[i]}'] = samples.pop(f'beta_{i}')
+            if f'beta_{i}' in samples:
+                samples[f'cov_state_{site_covs_names[i]}'] = samples.pop(f'beta_{i}')
     if obs_covs_names is not None:
         for i in range(len(obs_covs_names)):
-            samples[f'cov_det_{obs_covs_names[i]}'] = samples.pop(f'alpha_{i}')
+            if f'alpha_{i}' in samples:
+                samples[f'cov_det_{obs_covs_names[i]}'] = samples.pop(f'alpha_{i}')
     return samples

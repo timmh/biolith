@@ -327,5 +327,26 @@ class TestOccu(unittest.TestCase):
         self.assertTrue(np.allclose(alpha_samples_r_matrix.mean(axis=0), [results.samples[k].mean() for k in [f"cov_det_{i}" for i in range(len(true_params["alpha"]))]], atol=0.5))
 
 
+    def test_evaluation(self):
+        data, _ = simulate(simulate_missing=True)
+
+        from biolith.utils import fit, predict
+        results = fit(occu, **data, timeout=600)
+        posterior_samples = predict(occu, results.mcmc, **data)
+
+        from biolith.evaluation import lppd, posterior_predictive_check, residuals
+
+        # Test log pointwise predictive density (lppd)
+        lppd(occu, posterior_samples, **data)
+
+        # Test posterior predictive checks
+        for group_by in ["site", "revisit"]:
+            for statistic in ["freeman-tukey", "chi-squared"]:
+                posterior_predictive_check(posterior_samples, data["obs"], group_by=group_by, statistic=statistic)
+
+        # Test residuals
+        residuals(posterior_samples, data["obs"])
+        
+
 if __name__ == '__main__':
     unittest.main()

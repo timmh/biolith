@@ -13,7 +13,7 @@ def predict(
         session_duration=None,
         num_samples=1000,
         random_seed=0,
-        infer_discrete=True,
+        infer_discrete=False,
         timeout=None,
         **kwargs,
     ):
@@ -22,7 +22,7 @@ def predict(
 
     predictive = Predictive(model_fn, posterior_samples=mcmc.get_samples(), num_samples=num_samples, infer_discrete=infer_discrete)
     arguments = dict(site_covs=site_covs, obs_covs=obs_covs, obs=obs, session_duration=session_duration)
-    valid_arguments = {k: v for k, v in arguments.items() if v is not None}
+    valid_arguments = {k: v for k, v in arguments.items() if v is not None and k != "obs"}
     rng_key = jax.random.PRNGKey(random_seed)
 
     if timeout is not None:
