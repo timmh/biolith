@@ -14,8 +14,8 @@ def occu_cs(
     coords: Optional[jnp.ndarray] = None,
     ell: float = 1.0,
     obs: Optional[jnp.ndarray] = None,
-    prior_beta: dist.Distribution | List[dist.Distribution] = dist.Normal(),
-    prior_alpha: dist.Distribution | List[dist.Distribution] = dist.Normal(),
+    prior_beta: dist.Distribution = dist.Normal(),
+    prior_alpha: dist.Distribution = dist.Normal(),
     prior_mu: dist.Distribution | Tuple[dist.Distribution] = dist.Normal(0, 10),
     prior_sigma: dist.Distribution | Tuple[dist.Distribution] = dist.Gamma(5, 1),
     prior_gp_sd: dist.Distribution = dist.HalfNormal(1.0),
@@ -45,10 +45,8 @@ def occu_cs(
     site_covs = jnp.nan_to_num(site_covs)
     
     # Occupancy and detection covariates
-    prior_betas = prior_beta if isinstance(prior_beta, list) else [prior_beta] * (n_site_covs + 1)
-    prior_alphas = prior_alpha if isinstance(prior_alpha, list) else [prior_alpha] * (n_obs_covs + 1)
-    beta = jnp.array([numpyro.sample(f'beta_{i}', prior_betas[i]) for i in range(n_site_covs + 1)])
-    alpha = jnp.array([numpyro.sample(f'alpha_{i}', prior_alphas[i]) for i in range(n_obs_covs + 1)])
+    beta = numpyro.sample('beta', prior_beta.expand([n_site_covs + 1]).to_event(1))
+    alpha = numpyro.sample('alpha', prior_alpha.expand([n_obs_covs + 1]).to_event(1))
 
     if coords is not None:
         w = sample_spatial_effects(
@@ -76,13 +74,13 @@ def occu_cs(
     with numpyro.plate('site', n_sites, dim=-1):
 
         # Occupancy process
-        psi = numpyro.deterministic("psi", jax.nn.sigmoid(jnp.tile(beta[0], (n_sites,)) + jnp.sum(jnp.array([beta[i + 1] * site_covs[i, ...] for i in range(n_site_covs)]), axis=0) + w))
+        psi = numpyro.deterministic("psi", jax.nn.sigmoid(jnp.tile(beta[0], (n_sites,)) + jnp.dot(beta[1:], site_covs) + w))
         z = numpyro.sample('z', dist.Bernoulli(probs=psi), infer={'enumerate': 'parallel'})
 
         with numpyro.plate('time_periods', time_periods, dim=-2):
 
             # Detection process
-            f = numpyro.sample('f', dist.Bernoulli(z * jax.nn.sigmoid(jnp.tile(alpha[0], (time_periods, n_sites)) + jnp.sum(jnp.array([alpha[i + 1] * obs_covs[i, ...] for i in range(n_obs_covs)]), axis=0))), infer={'enumerate': 'parallel'})
+            f = numpyro.sample('f', dist.Bernoulli(z * jax.nn.sigmoid(jnp.tile(alpha[0], (time_periods, n_sites)) + jnp.sum(alpha[1:, None, None] * obs_covs, axis=0))), infer={'enumerate': 'parallel'})
 
             if obs is not None:
                 with numpyro.handlers.mask(mask=jnp.isfinite(obs)):

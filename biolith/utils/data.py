@@ -41,8 +41,16 @@ def rename_samples(samples, site_covs_names=None, obs_covs_names=None):
         for i in range(len(site_covs_names)):
             if f'beta_{i}' in samples:
                 samples[f'cov_state_{site_covs_names[i]}'] = samples.pop(f'beta_{i}')
+        if 'beta' in samples:
+            beta = samples.pop('beta')
+            for i in range(len(site_covs_names)):
+                samples[f'cov_state_{site_covs_names[i]}'] = beta[..., i]
     if obs_covs_names is not None:
         for i in range(len(obs_covs_names)):
             if f'alpha_{i}' in samples:
                 samples[f'cov_det_{obs_covs_names[i]}'] = samples.pop(f'alpha_{i}')
+    if 'alpha' in samples:
+        alpha = samples.pop('alpha')
+        for i in range(len(obs_covs_names)):
+            samples[f'cov_det_{obs_covs_names[i]}'] = alpha[..., i]
     return samples
