@@ -19,12 +19,25 @@ def lppd(
     given the posterior samples and the observed data. It uses the
     `log_likelihood` function from numpyro to evaluate the model's
     likelihood for the provided observations.
-    Args:
+
+    Parameters
+    ----------
         model_fn: The model function used to fit the data.
         posterior_samples: A dictionary containing posterior samples from a fitted model.
         **kwargs: Additional keyword arguments passed to the log_likelihood or model function.
-    Returns:
+    Returns
+    -------
         float: The log pointwise predictive density (lppd) value.
+
+    Examples
+    --------
+    >>> from biolith.models import simulate, occu
+    >>> from biolith.utils import fit, predict
+    >>> from biolith.evaluation import lppd
+    >>> data, _ = simulate()
+    >>> results = fit(occu, **data)
+    >>> preds = predict(occu, results.mcmc, **data)
+    >>> lppd(occu, preds, **data)
     """
 
     with numpyro.handlers.block(), numpyro.handlers.seed(

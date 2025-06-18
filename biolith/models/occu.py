@@ -24,7 +24,52 @@ def occu(
     prior_prob_fp_unoccupied: dist.Distribution = dist.Beta(2, 5),
     prior_gp_sd: dist.Distribution = dist.HalfNormal(1.0),
     prior_gp_length: dist.Distribution = dist.HalfNormal(1.0),
-):
+) -> None:
+    """
+    Bernoulli occupancy model inspired by MacKenzie et al. (2002) with optional false positives inspired by Royle and Link (2006).
+
+    References
+    ----------
+        - MacKenzie, D. I., J. D. Nichols, G. B. Lachman, S. Droege, J. Andrew Royle, and C. A. Langtimm. 2002. Estimating Site Occupancy Rates When Detection Probabilities Are Less Than One. Ecology 83: 2248-2255.
+        - Royle, J.A., and W.A. Link. 2006. Generalized site occupancy models allowing for false positive and false negative errors. Ecology 87:835-841.
+
+    Parameters
+    ----------
+    site_covs : jnp.ndarray
+        An array of site-level covariates of shape (n_sites, n_site_covs).
+    obs_covs : jnp.ndarray
+        An array of observation-level covariates of shape (n_sites, n_revisits, n_obs_covs).
+    coords : jnp.ndarray, optional
+        Coordinates for a spatial random effect when provided.
+    ell : float
+        Spatial kernel length scale used if coords is provided.
+    false_positives_constant : bool
+        Flag indicating whether to model a constant false positive rate.
+    false_positives_unoccupied : bool
+        Flag indicating whether to model false positives in unoccupied sites.
+    obs : jnp.ndarray, optional
+        Observation matrix of shape (n_sites, n_revisits) or None.
+    prior_beta : numpyro.distributions.Distribution
+        Prior distribution for the site-level regression coefficients.
+    prior_alpha : numpyro.distributions.Distribution
+        Prior distribution for the observation-level regression coefficients.
+    prior_prob_fp_constant : numpyro.distributions.Distribution
+        Prior distribution for the constant false positive rate.
+    prior_prob_fp_unoccupied : numpyro.distributions.Distribution
+        Prior distribution for the false positive rate in unoccupied sites.
+    prior_gp_sd : numpyro.distributions.Distribution
+        Prior distribution for the spatial random effect scale.
+    prior_gp_length : numpyro.distributions.Distribution
+        Prior distribution for the spatial kernel length scale.
+
+    Examples
+    --------
+    >>> from biolith.models import occu, simulate
+    >>> from biolith.utils import fit
+    >>> data, _ = simulate()
+    >>> results = fit(occu, **data)
+    >>> print(results.samples['psi'].mean())
+    """
 
     # Check input data
     assert (
@@ -145,23 +190,34 @@ def occu(
 
 
 def simulate(
-    n_site_covs=1,
-    n_obs_covs=1,
-    n_sites=100,  # number of sites
-    deployment_days_per_site=365,  # number of days each site is monitored
-    session_duration=7,  # 1, 7, or 30 days
-    prob_fp_unoccupied=0,  # probability of a false positive at unoccupied sites for a given time point
-    prob_fp_constant=0,  # constant probability of a false positive for a given time point
-    simulate_missing=False,  # whether to simulate missing data by setting some observations to NaN
-    min_occupancy=0.25,  # minimum occupancy rate
-    max_occupancy=0.75,  # maximum occupancy rate
-    min_observation_rate=0.1,  # minimum proportion of timesteps with observation
-    max_observation_rate=0.5,  # maximum proportion of timesteps with observation
-    random_seed=0,
+    n_site_covs: int = 1,
+    n_obs_covs: int = 1,
+    n_sites: int = 100,
+    deployment_days_per_site: int = 365,
+    session_duration: int = 7,
+    prob_fp_unoccupied: float = 0.0,
+    prob_fp_constant: float = 0.0,
+    simulate_missing: bool = False,
+    min_occupancy: float = 0.25,
+    max_occupancy: float = 0.75,
+    min_observation_rate: float = 0.1,
+    max_observation_rate: float = 0.5,
+    random_seed: int = 0,
     spatial: bool = False,
     gp_sd: float = 1.0,
     gp_l: float = 0.2,
-):
+) -> tuple[dict, dict]:
+    """Generate a synthetic dataset for the :func:`occu` model.
+
+    Returns ``(data, true_params)`` suitable for :func:`fit`.
+
+    Examples
+    --------
+    >>> from biolith.models import simulate
+    >>> data, params = simulate()
+    >>> list(data.keys())
+    ['site_covs', 'obs_covs', 'obs', 'coords', 'ell']
+    """
 
     # Initialize random number generator
     rng = np.random.default_rng(random_seed)

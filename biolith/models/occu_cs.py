@@ -22,7 +22,47 @@ def occu_cs(
     prior_sigma: dist.Distribution | Tuple[dist.Distribution] = dist.Gamma(5, 1),
     prior_gp_sd: dist.Distribution = dist.HalfNormal(1.0),
     prior_gp_length: dist.Distribution = dist.HalfNormal(1.0),
-):
+) -> None:
+    """
+    Continuous-score occupancy model inspired by Rhinehart et al. (2022), modeling classification scores as being drawn from true or false positive distributions.
+
+    References
+    ----------
+        - Rhinehart, T. A., Turek, D., & Kitzes, J. (2022). A continuous-score occupancy model that incorporates uncertain machine learning output from autonomous biodiversity surveys. Methods in Ecology and Evolution, 13, 1778–1789.
+
+    Parameters
+    ----------
+    site_covs : jnp.ndarray
+        Site-level covariates (n_sites, n_site_covs).
+    obs_covs : jnp.ndarray
+        Observation covariates (n_sites, time_periods, n_obs_covs).
+    coords : Optional[jnp.ndarray]
+        Site coordinates for spatial effects (n_sites, 2) or None.
+    ell : float
+        Optional distance matrix parameter.
+    obs : Optional[jnp.ndarray]
+        Observations (n_sites, time_periods) or None.
+    prior_beta : dist.Distribution
+        Prior for occupancy coefficients.
+    prior_alpha : dist.Distribution
+        Prior for detection coefficients.
+    prior_mu : dist.Distribution or Tuple[dist.Distribution]
+        Prior for mean continuous scores.
+    prior_sigma : dist.Distribution or Tuple[dist.Distribution]
+        Prior for standard deviations of continuous scores.
+    prior_gp_sd : dist.Distribution
+        Prior distribution for the spatial random effect scale.
+    prior_gp_length : dist.Distribution
+        Prior distribution for the spatial kernel length scale.
+
+    Examples
+    --------
+    >>> from biolith.models import occu_cs, simulate_cs
+    >>> from biolith.utils import fit
+    >>> data, _ = simulate_cs()
+    >>> results = fit(occu_cs, **data)
+    >>> print(results.samples['psi'].mean())
+    """
 
     # Check input data
     assert (
@@ -130,19 +170,30 @@ def occu_cs(
 
 
 def simulate_cs(
-    n_site_covs=1,
-    n_obs_covs=1,
-    n_sites=100,  # number of sites
-    deployment_days_per_site=365,  # number of days each site is monitored
-    session_duration=7,  # 1, 7, or 30 days
-    simulate_missing=False,  # whether to simulate missing data by setting some observations to NaN
-    min_occupancy=0.25,  # minimum occupancy rate
-    max_occupancy=0.75,  # maximum occupancy rate
-    random_seed=0,
+    n_site_covs: int = 1,
+    n_obs_covs: int = 1,
+    n_sites: int = 100,
+    deployment_days_per_site: int = 365,
+    session_duration: int = 7,
+    simulate_missing: bool = False,
+    min_occupancy: float = 0.25,
+    max_occupancy: float = 0.75,
+    random_seed: int = 0,
     spatial: bool = False,
     gp_sd: float = 1.0,
     gp_l: float = 0.2,
-):
+) -> tuple[dict, dict]:
+    """Simulate data for :func:`occu_cs`.
+
+    Returns ``(data, true_params)`` for :func:`fit`.
+
+    Examples
+    --------
+    >>> from biolith.models import simulate_cs
+    >>> data, params = simulate_cs()
+    >>> sorted(data.keys())
+    ['coords', 'ell', 'obs', 'obs_covs', 'site_covs']
+    """
 
     # Initialize random number generator
     rng = np.random.default_rng(random_seed)

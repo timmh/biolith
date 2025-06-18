@@ -25,7 +25,53 @@ def occu_cop(
     prior_rate_fp_unoccupied: dist.Distribution = dist.Exponential(),
     prior_gp_sd: dist.Distribution = dist.HalfNormal(1.0),
     prior_gp_length: dist.Distribution = dist.HalfNormal(1.0),
-):
+) -> None:
+    """
+    Count occupancy model using a Poisson detection process, inspired by Pautrel et al. (2024).
+
+    References
+    ----------
+        - Pautrel, L., Moulherat, S., Gimenez, O., & Etienne, M.-P. (2024). Analysing biodiversity observation data collected in continuous time: Should we use discrete- or continuous-time occupancy models? Methods in Ecology and Evolution, 15, 935–950.
+
+    Parameters
+    ----------
+    site_covs : jnp.ndarray
+        Per-site covariates, shape (n_sites, n_site_covs).
+    obs_covs : jnp.ndarray
+        Observation covariates, shape (n_sites, time_periods, n_obs_covs).
+    coords : Optional[jnp.ndarray], optional
+        Site coordinates for spatial effects, shape (n_sites, 2).
+    ell : float
+        Spatial correlation length for the GP prior.
+    session_duration : Optional[jnp.ndarray], optional
+        Duration of each sampling session, shape (n_sites, time_periods).
+    false_positives_constant : bool
+        If True, model a constant false positive rate for all sites.
+    false_positives_unoccupied : bool
+        If True, model a false positive rate only for unoccupied sites.
+    obs : Optional[jnp.ndarray], optional
+        Observed counts, shape (n_sites, time_periods).
+    prior_beta : dist.Distribution
+        Prior distribution for occupancy coefficients.
+    prior_alpha : dist.Distribution
+        Prior distribution for detection coefficients.
+    prior_rate_fp_constant : dist.Distribution
+        Prior for the constant false positive rate parameter.
+    prior_rate_fp_unoccupied : dist.Distribution
+        Prior for the false positive rate parameter in unoccupied sites.
+    prior_gp_sd : dist.Distribution
+        Prior distribution for the spatial random effect scale.
+    prior_gp_length : dist.Distribution
+        Prior distribution for the spatial kernel length scale.
+
+    Examples
+    --------
+    >>> from biolith.models import occu_cop, simulate_cop
+    >>> from biolith.utils import fit
+    >>> data, _ = simulate_cop()
+    >>> results = fit(occu_cop, **data)
+    >>> print(results.samples['psi'].mean())
+    """
 
     # Check input data
     assert (
@@ -38,7 +84,6 @@ def occu_cop(
     assert (
         session_duration is None or session_duration.ndim == 2
     ), "session_duration must be None or of shape (n_sites, time_periods)"
-    # assert (obs[np.isfinite(obs)] >= 0).all(), "observations must be non-negative"  # TODO: re-enable
     assert not (
         false_positives_constant and false_positives_unoccupied
     ), "false_positives_constant and false_positives_unoccupied cannot both be True"
@@ -80,7 +125,7 @@ def occu_cop(
         else 0
     )
 
-    # Model false positive rate only for occupied sites
+    # Model false positive rate only for unoccupied sites
     rate_fp_unoccupied = (
         numpyro.sample("rate_fp_unoccupied", prior_rate_fp_unoccupied)
         if false_positives_unoccupied
@@ -146,21 +191,32 @@ def occu_cop(
 
 
 def simulate_cop(
-    n_site_covs=1,
-    n_obs_covs=1,
-    n_sites=100,  # number of sites
-    deployment_days_per_site=365,  # number of days each site is monitored
-    session_duration=7,  # 1, 7, or 30 days
-    simulate_missing=False,  # whether to simulate missing data by setting some observations to NaN
-    min_occupancy=0.25,  # minimum occupancy rate
-    max_occupancy=0.75,  # maximum occupancy rate
-    min_observation_rate=0.5,  # minimum proportion of timesteps with observation
-    max_observation_rate=10,  # maximum proportion of timesteps with observation
-    random_seed=0,
+    n_site_covs: int = 1,
+    n_obs_covs: int = 1,
+    n_sites: int = 100,
+    deployment_days_per_site: int = 365,
+    session_duration: int = 7,
+    simulate_missing: bool = False,
+    min_occupancy: float = 0.25,
+    max_occupancy: float = 0.75,
+    min_observation_rate: float = 0.5,
+    max_observation_rate: float = 10.0,
+    random_seed: int = 0,
     spatial: bool = False,
     gp_sd: float = 1.0,
     gp_l: float = 0.2,
-):
+) -> tuple[dict, dict]:
+    """Simulate data for :func:`occu_cop`.
+
+    Returns ``(data, true_params)`` for use with :func:`fit`.
+
+    Examples
+    --------
+    >>> from biolith.models import simulate_cop
+    >>> data, params = simulate_cop()
+    >>> sorted(data.keys())
+    ['coords', 'ell', 'obs', 'obs_covs', 'session_duration', 'site_covs']
+    """
 
     # Initialize random number generator
     rng = np.random.default_rng(random_seed)

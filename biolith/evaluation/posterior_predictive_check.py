@@ -4,14 +4,12 @@ import jax.numpy as jnp
 
 
 def _freeman_tukey_stat(obs: jnp.ndarray, exp: jnp.ndarray) -> jnp.ndarray:
-    """Helper function to compute the Freeman-Tukey statistic."""
     return (jnp.sqrt(obs) - jnp.sqrt(exp)) ** 2
 
 
 def _chi_squared_stat(
     obs: jnp.ndarray, exp: jnp.ndarray, eps: float = 1e-10
 ) -> jnp.ndarray:
-    """Helper function to compute the chi-squared statistic."""
     return ((obs - exp) ** 2) / (exp + eps)
 
 
@@ -32,7 +30,8 @@ def posterior_predictive_check(
     each posterior sample. The Bayesian p-value is the proportion of times
     the discrepancy of the replicated data exceeds that of the observed data.
 
-    Args:
+    Parameters
+    ----------
         posterior_samples (dict): A dictionary from a NumPyro Predictive
             call or a similar source. It must contain the following keys:
             - 'y': Replicated observation data from the posterior predictive
@@ -42,18 +41,30 @@ def posterior_predictive_check(
             - 'prob_detection': Posterior samples for the detection probability. This is
                    necessary to compute the expected values for the GOF tests.
                    Shape: (num_samples, num_sites, num_revisits).
-        obs (np.ndarray): Ground truth observations on an unobserved test set.
-                          Shape: (num_sites, num_revisits).
+        obs (jnp.ndarray): Ground truth observations on an unobserved test set.
+                           Shape: (num_sites, num_revisits).
         group_by (str): Specifies how to aggregate the data for the test
                         statistic. Must be either 'site' or 'revisit'.
         statistic (str): The discrepancy statistic to use for the comparison.
                          Must be either 'freeman-tukey' or 'chi-squared'.
 
-    Returns:
+    Returns
+    -------
         float: The Bayesian p-value. A value close to 0.5 suggests a good
                model fit, while values near 0 or 1 suggest misfit.
 
-    Raises:
+    Examples
+    --------
+    >>> from biolith.models import simulate, occu
+    >>> from biolith.utils import fit, predict
+    >>> from biolith.evaluation import posterior_predictive_check
+    >>> data, _ = simulate()
+    >>> results = fit(occu, **data)
+    >>> preds = predict(occu, results.mcmc, **data)
+    >>> posterior_predictive_check(preds, data["obs"])
+
+    Raises
+    ------
         ValueError: If 'group_by' or 'statistic' are not valid options.
         KeyError: If 'posterior_samples' is missing the required keys
                   ('y', 'psi', 'prob_detection').

@@ -13,24 +13,35 @@ def residuals(
     to help diagnose occupancy model fit. It separates residuals for the
     occupancy process from the detection process.
 
-    Refs:
-        Wright, W. J., K. M. Irvine, and M. D. Higgs. 2019. Identifying
-        occupancy model inadequacies: can residuals separately assess
-        detection and presence? Ecology 100(6):e02703. 10.1002/ecy.2703
+    References
+    ----------
+        - Wright, W. J., K. M. Irvine, and M. D. Higgs. 2019. Identifying occupancy model inadequacies: can residuals separately assess detection and presence? Ecology 100(6):e02703. 10.1002/ecy.2703
 
-    Args:
+    Parameters
+    ----------
         posterior_samples: A dictionary containing posterior samples from a fitted model.
                           Must include 'z' (latent occupancy state), 'psi'
                           (occupancy probability), and 'prob_detection' (detection probability).
         obs: The original 2D observation data array of shape (n_sites, n_visits)
              used to fit the model.
 
-    Returns:
+    Returns
+    -------
         A tuple containing:
-        - np.ndarray: Occupancy residuals of shape (n_samples, n_sites).
-        - np.ndarray: Detection residuals of shape (n_samples, n_sites, n_visits).
+        - jnp.ndarray: Occupancy residuals of shape (n_samples, n_sites).
+        - jnp.ndarray: Detection residuals of shape (n_samples, n_sites, n_visits).
                       For a given posterior draw, residuals at sites considered
                       unoccupied (z=0) are returned as np.nan.
+
+    Examples
+    --------
+    >>> from biolith.models import simulate, occu
+    >>> from biolith.utils import fit, predict
+    >>> from biolith.evaluation import residuals
+    >>> data, _ = simulate()
+    >>> results = fit(occu, **data)
+    >>> preds = predict(occu, results.mcmc, **data)
+    >>> occ_res, det_res = residuals(preds, data["obs"])
     """
 
     # Get posterior samples

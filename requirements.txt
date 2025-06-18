@@ -8,3 +8,6 @@ black
 isort
 pylint
 pyright
+sphinx
+sphinx_rtd_theme
+myst_parser

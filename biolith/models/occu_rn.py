@@ -24,7 +24,50 @@ def occu_rn(
     prior_prob_fp_constant: dist.Distribution = dist.Beta(2, 5),
     prior_gp_sd: dist.Distribution = dist.HalfNormal(1.0),
     prior_gp_length: dist.Distribution = dist.HalfNormal(1.0),
-):
+) -> None:
+    """Occupancy model inspired by Royle and Nichols (2003), relating observations to the number of individuals present at a site.
+
+    References
+    ----------
+        - Royle, J. A. and Nichols, J. D. (2003) Estimating Abundance from Repeated Presence-Absence Data or Point Counts. Ecology, 84(3) pp. 777–790.
+
+    Parameters
+    ----------
+    site_covs : jnp.ndarray
+        An array of site-level covariates of shape (n_sites, n_site_covs).
+    obs_covs : jnp.ndarray
+        An array of observation-level covariates of shape (n_sites, n_revisits, n_obs_covs).
+    coords : jnp.ndarray, optional
+        Coordinates for a spatial random effect when provided.
+    ell : float
+        Spatial kernel length scale used if coords is provided.
+    false_positives_constant : bool
+        Flag indicating whether to model a constant false positive rate.
+    max_abundance : int
+        Maximum abundance cutoff for the Poisson distribution.
+    obs : jnp.ndarray, optional
+        Observation matrix of shape (n_sites, n_revisits) or None.
+    prior_beta : numpyro.distributions.Distribution
+        Prior distribution for the site-level regression coefficients.
+    prior_alpha : numpyro.distributions.Distribution
+        Prior distribution for the observation-level regression coefficients.
+    prior_prob_fp_constant : numpyro.distributions.Distribution
+        Prior distribution for the constant false positive rate.
+    prior_prob_fp_unoccupied : numpyro.distributions.Distribution
+        Prior distribution for the false positive rate in unoccupied sites.
+    prior_gp_sd : numpyro.distributions.Distribution
+        Prior distribution for the spatial random effect scale.
+    prior_gp_length : numpyro.distributions.Distribution
+        Prior distribution for the spatial kernel length scale.
+
+    Examples
+    --------
+    >>> from biolith.models import occu_rn, simulate_rn
+    >>> from biolith.utils import fit
+    >>> data, _ = simulate_rn()
+    >>> results = fit(occu_rn, **data)
+    >>> print(results.samples['abundance'].mean())
+    """
 
     # Check input data
     assert site_covs.ndim == 2, "site_covs must be (n_sites, n_site_covs)"
@@ -118,22 +161,33 @@ def occu_rn(
 
 
 def simulate_rn(
-    n_site_covs=1,
-    n_obs_covs=1,
-    n_sites=100,  # number of sites
-    deployment_days_per_site=365,  # number of days each site is monitored
-    session_duration=7,  # 1, 7, or 30 days
-    prob_fp=0,  # probability of a false positive for a given time point
-    simulate_missing=False,  # whether to simulate missing data by setting some observations to NaN
-    min_occupancy=0.25,  # minimum occupancy rate
-    max_occupancy=0.75,  # maximum occupancy rate
-    min_observation_rate=0.1,  # minimum proportion of timesteps with observation
-    max_observation_rate=0.5,  # maximum proportion of timesteps with observation
-    random_seed=0,
+    n_site_covs: int = 1,
+    n_obs_covs: int = 1,
+    n_sites: int = 100,
+    deployment_days_per_site: int = 365,
+    session_duration: int = 7,
+    prob_fp: float = 0.0,
+    simulate_missing: bool = False,
+    min_occupancy: float = 0.25,
+    max_occupancy: float = 0.75,
+    min_observation_rate: float = 0.1,
+    max_observation_rate: float = 0.5,
+    random_seed: int = 0,
     spatial: bool = False,
     gp_sd: float = 1.0,
     gp_l: float = 0.2,
-):
+) -> tuple[dict, dict]:
+    """Simulate data for :func:`occu_rn`.
+
+    Returns ``(data, true_params)`` for :func:`fit`.
+
+    Examples
+    --------
+    >>> from biolith.models import simulate_rn
+    >>> data, params = simulate_rn()
+    >>> sorted(data.keys())
+    ['coords', 'ell', 'obs', 'obs_covs', 'site_covs']
+    """
 
     # Initialize random number generator
     rng = np.random.default_rng(random_seed)
