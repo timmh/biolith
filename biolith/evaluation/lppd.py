@@ -1,9 +1,10 @@
 from typing import Dict
-import numpy as np
+
 import jax
 import jax.numpy as jnp
-from jax.scipy.special import logsumexp
+import numpy as np
 import numpyro
+from jax.scipy.special import logsumexp
 from numpyro.infer import log_likelihood
 
 
@@ -25,9 +26,13 @@ def lppd(
     Returns:
         float: The log pointwise predictive density (lppd) value.
     """
-    
-    with numpyro.handlers.block(), numpyro.handlers.seed(rng_seed=jax.random.PRNGKey(0)):
+
+    with numpyro.handlers.block(), numpyro.handlers.seed(
+        rng_seed=jax.random.PRNGKey(0)
+    ):
         log_lik_test = log_likelihood(model_fn, posterior_samples, **kwargs)
-        lppd_test = jnp.sum(logsumexp(log_lik_test["y"], axis=0) - np.log(log_lik_test["y"].shape[0])).item()
+        lppd_test = jnp.sum(
+            logsumexp(log_lik_test["y"], axis=0) - np.log(log_lik_test["y"].shape[0])
+        ).item()
 
     return lppd_test

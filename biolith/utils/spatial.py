@@ -1,11 +1,12 @@
-import numpy as np
+from typing import Optional, Tuple
+
 import jax
 import jax.numpy as jnp
+import numpy as np
 import numpyro
 import numpyro.distributions as dist
 from numpyro.contrib.hsgp.approximation import hsgp_squared_exponential
 from numpyro.handlers import scope
-from typing import Optional, Tuple
 
 
 def prepare_nngp(coords: np.ndarray, n_neighbors: int = 15, c: float = 1.5):
@@ -60,7 +61,7 @@ def simulate_spatial_effects(
     if rng is None:
         rng = np.random.default_rng()
     neighbor_idx, dists_sq, coords, ell = prepare_nngp(coords, n_neighbors)
-    cov = lambda d: gp_sd ** 2 * np.exp(-d / (gp_l ** 2))
+    cov = lambda d: gp_sd**2 * np.exp(-d / (gp_l**2))
     w = np.zeros(coords.shape[0])
     for i in range(coords.shape[0]):
         if i < n_neighbors:
@@ -71,6 +72,6 @@ def simulate_spatial_effects(
             C_iS = cov(dists_sq[i, idx])
             A = np.linalg.solve(C_SS, C_iS)
             mu = A.dot(w[idx])
-            var = gp_sd ** 2 - A.dot(C_iS)
+            var = gp_sd**2 - A.dot(C_iS)
             w[i] = rng.normal(mu, np.sqrt(var))
     return w, ell

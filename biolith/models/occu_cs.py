@@ -1,10 +1,12 @@
 import unittest
-from typing import Optional, List, Tuple
-import numpy as np
+from typing import List, Optional, Tuple
+
 import jax
 import jax.numpy as jnp
+import numpy as np
 import numpyro
 import numpyro.distributions as dist
+
 from biolith.utils.spatial import sample_spatial_effects, simulate_spatial_effects
 
 
@@ -23,30 +25,40 @@ def occu_cs(
 ):
 
     # Check input data
-    assert obs is None or obs.ndim == 2, "obs must be None or of shape (n_sites, time_periods)"
+    assert (
+        obs is None or obs.ndim == 2
+    ), "obs must be None or of shape (n_sites, time_periods)"
     assert site_covs.ndim == 2, "site_covs must be of shape (n_sites, n_site_covs)"
-    assert obs_covs.ndim == 3, "obs_covs must be of shape (n_sites, time_periods, n_obs_covs)"
+    assert (
+        obs_covs.ndim == 3
+    ), "obs_covs must be of shape (n_sites, time_periods, n_obs_covs)"
 
     n_sites = site_covs.shape[0]
     time_periods = obs_covs.shape[1]
     n_site_covs = site_covs.shape[1]
     n_obs_covs = obs_covs.shape[2]
 
-    assert n_sites == site_covs.shape[0] == obs_covs.shape[0], "site_covs and obs_covs must have the same number of sites"
-    assert time_periods == obs_covs.shape[1], "obs_covs must have the same number of time periods as obs"
+    assert (
+        n_sites == site_covs.shape[0] == obs_covs.shape[0]
+    ), "site_covs and obs_covs must have the same number of sites"
+    assert (
+        time_periods == obs_covs.shape[1]
+    ), "obs_covs must have the same number of time periods as obs"
     if obs is not None:
         assert n_sites == obs.shape[0], "obs must have n_sites rows"
         assert time_periods == obs.shape[1], "obs must have time_periods columns"
 
     # Mask observations where covariates are missing
-    obs_mask = jnp.isnan(obs_covs).any(axis=-1) | jnp.tile(jnp.isnan(site_covs).any(axis=-1)[:, None], (1, time_periods))
+    obs_mask = jnp.isnan(obs_covs).any(axis=-1) | jnp.tile(
+        jnp.isnan(site_covs).any(axis=-1)[:, None], (1, time_periods)
+    )
     obs = jnp.where(obs_mask, jnp.nan, obs) if obs is not None else None
     obs_covs = jnp.nan_to_num(obs_covs)
     site_covs = jnp.nan_to_num(site_covs)
-    
+
     # Occupancy and detection covariates
-    beta = numpyro.sample('beta', prior_beta.expand([n_site_covs + 1]).to_event(1))
-    alpha = numpyro.sample('alpha', prior_alpha.expand([n_obs_covs + 1]).to_event(1))
+    beta = numpyro.sample("beta", prior_beta.expand([n_site_covs + 1]).to_event(1))
+    alpha = numpyro.sample("alpha", prior_alpha.expand([n_obs_covs + 1]).to_event(1))
 
     if coords is not None:
         w = sample_spatial_effects(
@@ -60,48 +72,76 @@ def occu_cs(
 
     # Continuous score parameters
     prior_mus = prior_mu if isinstance(prior_mu, tuple) else (prior_mu, prior_mu)
-    mu0 = numpyro.sample('mu0', prior_mus[0])
-    mu1 = numpyro.sample('mu1', dist.TruncatedDistribution(prior_mus[1], low=mu0))
-    prior_sigmas = prior_sigma if isinstance(prior_sigma, tuple) else (prior_sigma, prior_sigma)
-    sigma0 = numpyro.sample('sigma0', prior_sigmas[0])
-    sigma1 = numpyro.sample('sigma1', prior_sigmas[1])
+    mu0 = numpyro.sample("mu0", prior_mus[0])
+    mu1 = numpyro.sample("mu1", dist.TruncatedDistribution(prior_mus[1], low=mu0))
+    prior_sigmas = (
+        prior_sigma if isinstance(prior_sigma, tuple) else (prior_sigma, prior_sigma)
+    )
+    sigma0 = numpyro.sample("sigma0", prior_sigmas[0])
+    sigma1 = numpyro.sample("sigma1", prior_sigmas[1])
 
     # Transpose in order to fit NumPyro's plate structure
     site_covs = site_covs.transpose((1, 0))
     obs_covs = obs_covs.transpose((2, 1, 0))
     obs = obs.transpose((1, 0))
 
-    with numpyro.plate('site', n_sites, dim=-1):
+    with numpyro.plate("site", n_sites, dim=-1):
 
         # Occupancy process
-        psi = numpyro.deterministic("psi", jax.nn.sigmoid(jnp.tile(beta[0], (n_sites,)) + jnp.dot(beta[1:], site_covs) + w))
-        z = numpyro.sample('z', dist.Bernoulli(probs=psi), infer={'enumerate': 'parallel'})
+        psi = numpyro.deterministic(
+            "psi",
+            jax.nn.sigmoid(
+                jnp.tile(beta[0], (n_sites,)) + jnp.dot(beta[1:], site_covs) + w
+            ),
+        )
+        z = numpyro.sample(
+            "z", dist.Bernoulli(probs=psi), infer={"enumerate": "parallel"}
+        )
 
-        with numpyro.plate('time_periods', time_periods, dim=-2):
+        with numpyro.plate("time_periods", time_periods, dim=-2):
 
             # Detection process
-            f = numpyro.sample('f', dist.Bernoulli(z * jax.nn.sigmoid(jnp.tile(alpha[0], (time_periods, n_sites)) + jnp.sum(alpha[1:, None, None] * obs_covs, axis=0))), infer={'enumerate': 'parallel'})
+            f = numpyro.sample(
+                "f",
+                dist.Bernoulli(
+                    z
+                    * jax.nn.sigmoid(
+                        jnp.tile(alpha[0], (time_periods, n_sites))
+                        + jnp.sum(alpha[1:, None, None] * obs_covs, axis=0)
+                    )
+                ),
+                infer={"enumerate": "parallel"},
+            )
 
             if obs is not None:
                 with numpyro.handlers.mask(mask=jnp.isfinite(obs)):
-                    numpyro.sample('s', dist.Normal((1 - f) * mu0 + f * mu1, (1 - f) * sigma0 + f * sigma1), obs=jnp.nan_to_num(obs))
+                    numpyro.sample(
+                        "s",
+                        dist.Normal(
+                            (1 - f) * mu0 + f * mu1, (1 - f) * sigma0 + f * sigma1
+                        ),
+                        obs=jnp.nan_to_num(obs),
+                    )
             else:
-                numpyro.sample('s', dist.Normal((1 - f) * mu0 + f * mu1, (1 - f) * sigma0 + f * sigma1))
+                numpyro.sample(
+                    "s",
+                    dist.Normal((1 - f) * mu0 + f * mu1, (1 - f) * sigma0 + f * sigma1),
+                )
 
 
 def simulate_cs(
-        n_site_covs=1,
-        n_obs_covs=1,
-        n_sites=100,  # number of sites
-        deployment_days_per_site=365,  # number of days each site is monitored
-        session_duration=7,  # 1, 7, or 30 days
-        simulate_missing=False,  # whether to simulate missing data by setting some observations to NaN
-        min_occupancy=0.25,  # minimum occupancy rate
-        max_occupancy=0.75,  # maximum occupancy rate
-        random_seed=0,
-        spatial: bool = False,
-        gp_sd: float = 1.0,
-        gp_l: float = 0.2,
+    n_site_covs=1,
+    n_obs_covs=1,
+    n_sites=100,  # number of sites
+    deployment_days_per_site=365,  # number of days each site is monitored
+    session_duration=7,  # 1, 7, or 30 days
+    simulate_missing=False,  # whether to simulate missing data by setting some observations to NaN
+    min_occupancy=0.25,  # minimum occupancy rate
+    max_occupancy=0.75,  # maximum occupancy rate
+    random_seed=0,
+    spatial: bool = False,
+    gp_sd: float = 1.0,
+    gp_l: float = 0.2,
 ):
 
     # Initialize random number generator
@@ -116,8 +156,12 @@ def simulate_cs(
     while z is None or z.mean() < min_occupancy or z.mean() > max_occupancy:
 
         # Generate intercept and slopes
-        beta = rng.normal(size=n_site_covs + 1)  # intercept and slopes for occupancy logistic regression
-        alpha = rng.normal(size=n_obs_covs + 1)  # intercept and slopes for detection logistic regression
+        beta = rng.normal(
+            size=n_site_covs + 1
+        )  # intercept and slopes for occupancy logistic regression
+        alpha = rng.normal(
+            size=n_obs_covs + 1
+        )  # intercept and slopes for detection logistic regression
 
         # Generate occupancy and site-level covariates
         site_covs = rng.normal(size=(n_sites, n_site_covs))
@@ -125,15 +169,40 @@ def simulate_cs(
             w, ell = simulate_spatial_effects(coords, gp_sd=gp_sd, gp_l=gp_l, rng=rng)
         else:
             w, ell = np.zeros(n_sites), 0.0
-        psi = 1 / (1 + np.exp(-(beta[0].repeat(n_sites) + np.sum([beta[i + 1] * site_covs[..., i] for i in range(n_site_covs)], axis=0) + w)))
-        z = rng.binomial(n=1, p=psi, size=n_sites)  # vector of latent occupancy status for each site
+        psi = 1 / (
+            1
+            + np.exp(
+                -(
+                    beta[0].repeat(n_sites)
+                    + np.sum(
+                        [beta[i + 1] * site_covs[..., i] for i in range(n_site_covs)],
+                        axis=0,
+                    )
+                    + w
+                )
+            )
+        )
+        z = rng.binomial(
+            n=1, p=psi, size=n_sites
+        )  # vector of latent occupancy status for each site
 
         # Generate detection data
         time_periods = round(deployment_days_per_site / session_duration)
 
         # Create matrix of detection covariates
         obs_covs = rng.normal(size=(n_sites, time_periods, n_obs_covs))
-        p = 1 / (1 + np.exp(-(alpha[0].repeat(n_sites)[:, None] + np.sum([alpha[i + 1] * obs_covs[..., i] for i in range(n_obs_covs)], axis=0))))
+        p = 1 / (
+            1
+            + np.exp(
+                -(
+                    alpha[0].repeat(n_sites)[:, None]
+                    + np.sum(
+                        [alpha[i + 1] * obs_covs[..., i] for i in range(n_obs_covs)],
+                        axis=0,
+                    )
+                )
+            )
+        )
 
         # Create matrix of detections
         obs = np.zeros((n_sites, time_periods))
@@ -151,13 +220,19 @@ def simulate_cs(
         for i in range(n_sites):
             f[i] = rng.binomial(n=1, p=(p[i, :] * z[i]), size=time_periods)
             for t in range(time_periods):
-                obs[i, t] = rng.normal(mu0 if f[i, t] == 0 else mu1, sigma0 if f[i, t] == 0 else sigma1)
+                obs[i, t] = rng.normal(
+                    mu0 if f[i, t] == 0 else mu1, sigma0 if f[i, t] == 0 else sigma1
+                )
 
         if simulate_missing:
             # Simulate missing data:
             obs[rng.choice([True, False], size=obs.shape, p=[0.2, 0.8])] = np.nan
-            obs_covs[rng.choice([True, False], size=obs_covs.shape, p=[0.05, 0.95])] = np.nan
-            site_covs[rng.choice([True, False], size=site_covs.shape, p=[0.05, 0.95])] = np.nan
+            obs_covs[rng.choice([True, False], size=obs_covs.shape, p=[0.05, 0.95])] = (
+                np.nan
+            )
+            site_covs[
+                rng.choice([True, False], size=site_covs.shape, p=[0.05, 0.95])
+            ] = np.nan
 
     print(f"True occupancy: {np.mean(z):.4f}")
 
@@ -187,26 +262,66 @@ class TestOccuCS(unittest.TestCase):
         data, true_params = simulate_cs(simulate_missing=True)
 
         from biolith.utils import fit
+
         results = fit(occu_cs, **data, timeout=600)
 
-        self.assertTrue(np.allclose(results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1))
-        self.assertTrue(np.allclose([results.samples[k].mean() for k in [f"cov_state_{i}" for i in range(len(true_params["beta"]))]], true_params["beta"], atol=0.5))
-        self.assertTrue(np.allclose([results.samples[k].mean() for k in [f"cov_det_{i}" for i in range(len(true_params["alpha"]))]], true_params["alpha"], atol=0.5))
-        self.assertTrue(np.allclose(results.samples["mu0"].mean(), true_params["mu0"], atol=1))
-        self.assertTrue(np.allclose(results.samples["mu1"].mean(), true_params["mu1"], atol=1))
-        self.assertTrue(np.allclose(results.samples["sigma0"].mean(), true_params["sigma0"], atol=1))
-        self.assertTrue(np.allclose(results.samples["sigma1"].mean(), true_params["sigma1"], atol=1))
+        self.assertTrue(
+            np.allclose(
+                results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1
+            )
+        )
+        self.assertTrue(
+            np.allclose(
+                [
+                    results.samples[k].mean()
+                    for k in [f"cov_state_{i}" for i in range(len(true_params["beta"]))]
+                ],
+                true_params["beta"],
+                atol=0.5,
+            )
+        )
+        self.assertTrue(
+            np.allclose(
+                [
+                    results.samples[k].mean()
+                    for k in [f"cov_det_{i}" for i in range(len(true_params["alpha"]))]
+                ],
+                true_params["alpha"],
+                atol=0.5,
+            )
+        )
+        self.assertTrue(
+            np.allclose(results.samples["mu0"].mean(), true_params["mu0"], atol=1)
+        )
+        self.assertTrue(
+            np.allclose(results.samples["mu1"].mean(), true_params["mu1"], atol=1)
+        )
+        self.assertTrue(
+            np.allclose(results.samples["sigma0"].mean(), true_params["sigma0"], atol=1)
+        )
+        self.assertTrue(
+            np.allclose(results.samples["sigma1"].mean(), true_params["sigma1"], atol=1)
+        )
 
     def test_occu_spatial(self):
         data, true_params = simulate_cs(simulate_missing=True, spatial=True)
 
         from biolith.utils import fit
+
         results = fit(occu_cs, **data, timeout=600)
 
-        self.assertTrue(np.allclose(results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1))
-        self.assertTrue(np.allclose(results.samples["gp_sd"].mean(), true_params["gp_sd"], atol=1.0))
-        self.assertTrue(np.allclose(results.samples["gp_l"].mean(), true_params["gp_l"], atol=0.5))
+        self.assertTrue(
+            np.allclose(
+                results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1
+            )
+        )
+        self.assertTrue(
+            np.allclose(results.samples["gp_sd"].mean(), true_params["gp_sd"], atol=1.0)
+        )
+        self.assertTrue(
+            np.allclose(results.samples["gp_l"].mean(), true_params["gp_l"], atol=0.5)
+        )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

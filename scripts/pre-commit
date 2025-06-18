@@ -1,0 +1,5 @@
+#!/bin/sh
+# Pre-commit hook to run formatting and checks
+set -e
+"$(git rev-parse --show-toplevel)/scripts/format.sh"
+"$(git rev-parse --show-toplevel)/scripts/check.sh"

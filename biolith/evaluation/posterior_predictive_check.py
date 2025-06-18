@@ -1,4 +1,5 @@
-from typing import Literal, Dict
+from typing import Dict, Literal
+
 import jax.numpy as jnp
 
 
@@ -6,15 +7,19 @@ def _freeman_tukey_stat(obs: jnp.ndarray, exp: jnp.ndarray) -> jnp.ndarray:
     """Helper function to compute the Freeman-Tukey statistic."""
     return (jnp.sqrt(obs) - jnp.sqrt(exp)) ** 2
 
-def _chi_squared_stat(obs: jnp.ndarray, exp: jnp.ndarray, eps: float = 1e-10) -> jnp.ndarray:
-    """Helper function to compute the chi-squared statistic."""    
+
+def _chi_squared_stat(
+    obs: jnp.ndarray, exp: jnp.ndarray, eps: float = 1e-10
+) -> jnp.ndarray:
+    """Helper function to compute the chi-squared statistic."""
     return ((obs - exp) ** 2) / (exp + eps)
+
 
 def posterior_predictive_check(
     posterior_samples: Dict[str, jnp.ndarray],
     obs: jnp.ndarray,
-    group_by: Literal['site', 'revisit'] = 'site',
-    statistic: Literal['freeman-tukey', 'chi-squared'] = 'freeman-tukey'
+    group_by: Literal["site", "revisit"] = "site",
+    statistic: Literal["freeman-tukey", "chi-squared"] = "freeman-tukey",
 ) -> float:
     """Performs posterior predictive checks of a Bayesian occupancy model.
 
@@ -54,23 +59,23 @@ def posterior_predictive_check(
                   ('y', 'psi', 'prob_detection').
     """
 
-    for key in ['y', 'psi', 'prob_detection']:
+    for key in ["y", "psi", "prob_detection"]:
         if key not in posterior_samples:
             raise KeyError(
                 f"The `posterior_predictive` dictionary must contain a '{key}' key."
             )
-    for key in ['prob_fp_constant', 'prob_fp_unoccupied']:
+    for key in ["prob_fp_constant", "prob_fp_unoccupied"]:
         if key in posterior_samples:
             raise KeyError(
                 f"Models including false positives are not yet supported, but posterior samples for '{key}' were found."
             )
-    y_rep = posterior_samples['y']
-    psi = posterior_samples['psi']
-    p = posterior_samples['prob_detection']
+    y_rep = posterior_samples["y"]
+    psi = posterior_samples["psi"]
+    p = posterior_samples["prob_detection"]
 
     stat_funcs = {
-        'freeman-tukey': _freeman_tukey_stat,
-        'chi-squared': _chi_squared_stat,
+        "freeman-tukey": _freeman_tukey_stat,
+        "chi-squared": _chi_squared_stat,
     }
     if statistic not in stat_funcs:
         raise ValueError(f"`statistic` must be one of {list(stat_funcs.keys())}")
@@ -87,11 +92,11 @@ def posterior_predictive_check(
     # E has a shape of (num_samples, num_sites, num_revisits).
     E = psi[:, :, jnp.newaxis] * p.transpose((0, 2, 1))
 
-    if group_by == 'site':
+    if group_by == "site":
         # Average across the 'revisit' axis.
         axis_to_agg = 2
         obs_grouped = jnp.round(jnp.nanmean(obs, axis=1) * jnp.isnan(obs).sum(axis=1))
-    elif group_by == 'revisit':
+    elif group_by == "revisit":
         # Average across the 'site' axis.
         axis_to_agg = 1
         obs_grouped = jnp.round(jnp.nanmean(obs, axis=0) * jnp.isnan(obs).sum(axis=0))

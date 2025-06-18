@@ -40,6 +40,19 @@ print(f"Mean true occupancy: {true_params['z'].mean():.2f}")
 ## Real-world Example
 To see a real-world example on camera trap data, see [this Jupyter Notebook](./assets/CameraTrapExample.ipynb) from the [EFI Statistical Methods Seminar Series](https://github.com/eco4cast/Statistical-Methods-Seminar-Series/tree/main/beery-haucke_biolith) or [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/timmh/biolith/blob/main/assets/CameraTrapExample.ipynb)
 
+## Development
+
+Run `python -m unittest` to run unit tests.
+
+Run `scripts/format.sh` to format the codebase. Execute `scripts/check.sh` to run
+isort and black in check mode along with pylint and pyright.
+
+To install the pre-commit hook for formatting and code linting, run:
+
+```bash
+./scripts/install_precommit.sh
+```
+
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.

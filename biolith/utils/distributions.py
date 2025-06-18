@@ -17,9 +17,13 @@ def RightTruncatedPoisson(rate, max_cutoff=100, factor=3):
 
     try:
         # Check whether max_cutoff is sensible
-        sensible_cutoff = jnp.ceil(rate + factor * jnp.sqrt(rate)).astype(int).max().item()
+        sensible_cutoff = (
+            jnp.ceil(rate + factor * jnp.sqrt(rate)).astype(int).max().item()
+        )
         if sensible_cutoff > max_cutoff:
-            print(f"max_cutoff={max_cutoff} might be too small for the given rate parameters. Set to at least {sensible_cutoff}.")
+            print(
+                f"max_cutoff={max_cutoff} might be too small for the given rate parameters. Set to at least {sensible_cutoff}."
+            )
     except jax.errors.ConcretizationTypeError:
         # Does not work under JAX JIT
         pass
