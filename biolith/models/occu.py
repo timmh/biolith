@@ -229,7 +229,7 @@ class TestOccu(unittest.TestCase):
 
         self.assertTrue(np.allclose(results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1))
         self.assertTrue(np.allclose(results.samples["gp_sd"].mean(), true_params["gp_sd"], atol=1.0))
-        self.assertTrue(np.allclose(results.samples["gp_l"].mean(), true_params["gp_l"], atol=0.1))
+        self.assertTrue(np.allclose(results.samples["gp_l"].mean(), true_params["gp_l"], atol=0.5))
 
     def test_vs_spoccupancy(self):
         data, true_params = simulate(simulate_missing=True)

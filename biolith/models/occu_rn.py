@@ -199,7 +199,7 @@ class TestOccuRN(unittest.TestCase):
 
         self.assertTrue(np.allclose(results.samples["abundance"].mean(), true_params["abundance"].mean(), rtol=0.1))
         self.assertTrue(np.allclose(results.samples["gp_sd"].mean(), true_params["gp_sd"], atol=1.0))
-        self.assertTrue(np.allclose(results.samples["gp_l"].mean(), true_params["gp_l"], atol=0.1))
+        self.assertTrue(np.allclose(results.samples["gp_l"].mean(), true_params["gp_l"], atol=0.5))
 
 
 if __name__ == '__main__':

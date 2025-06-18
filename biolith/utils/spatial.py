@@ -4,7 +4,7 @@ import jax.numpy as jnp
 import numpyro
 import numpyro.distributions as dist
 from numpyro.contrib.hsgp.approximation import hsgp_squared_exponential
-from numpyro.handlers import block
+from numpyro.handlers import scope
 from typing import Optional, Tuple
 
 
@@ -36,14 +36,15 @@ def sample_spatial_effects(
     gp_l = numpyro.sample("gp_l", prior_gp_length)
 
     # Sample GP using HSGP approximation
-    w = block(hsgp_squared_exponential)(
-        x=coords,
-        alpha=gp_sd,
-        length=gp_l,
-        m=20,  # basis functions per dimension
-        ell=ell,
-        non_centered=True,
-    )
+    with scope(prefix="gp", divider="_", hide_types=["plate"]):
+        w = hsgp_squared_exponential(
+            x=coords,
+            alpha=gp_sd,
+            length=gp_l,
+            m=20,  # basis functions per dimension
+            ell=ell,
+            non_centered=True,
+        )
 
     return w
 
