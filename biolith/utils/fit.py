@@ -1,7 +1,6 @@
 from collections import namedtuple
-import pandas as pd
 import jax
-from numpyro.infer import MCMC, HMC, NUTS, MixedHMC, DiscreteHMCGibbs
+from numpyro.infer import MCMC, HMC, NUTS, MixedHMC, DiscreteHMCGibbs, HMCECS
 
 from .data import dataframes_to_arrays, rename_samples
 
@@ -19,17 +18,21 @@ def fit(
         num_warmup=1000,
         random_seed=0,
         num_chains=5,
+        kernel="nuts",
         timeout=None,
         **kwargs,
     ):
 
     site_covs, obs_covs, obs, session_duration, site_covs_names, obs_covs_names = dataframes_to_arrays(site_covs, obs_covs, obs, session_duration)
 
-    kernel = NUTS(model_fn)
-    # kernel = HMC(model_fn)
-    # kernel = MixedHMC(HMC(model_fn))
-    # kernel = DiscreteHMCGibbs(NUTS(model_fn))
-    mcmc = MCMC(kernel, num_samples=num_samples, num_warmup=num_warmup, num_chains=num_chains, chain_method='parallel' if num_chains <= jax.local_device_count() else 'sequential')
+    kernel_inst = dict(
+        nuts=lambda: NUTS(model_fn),
+        hmc=lambda: HMC(model_fn),
+        mixed_hmc=lambda: MixedHMC(HMC(model_fn)),
+        discrete_hmc_gibbs=lambda: DiscreteHMCGibbs(NUTS(model_fn)),
+        hmcecs=lambda: HMCECS(NUTS(model_fn)),
+    )[kernel]()
+    mcmc = MCMC(kernel_inst, num_samples=num_samples, num_warmup=num_warmup, num_chains=num_chains, chain_method='parallel' if num_chains <= jax.local_device_count() else 'sequential')
 
     arguments = dict(site_covs=site_covs, obs_covs=obs_covs, obs=obs, session_duration=session_duration)
     valid_arguments = {k: v for k, v in arguments.items() if v is not None}
