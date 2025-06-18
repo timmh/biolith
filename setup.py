@@ -9,11 +9,14 @@ LONG_DESCRIPTION = (Path(__file__).parent / "README.md").read_text()
 
 # Setting up
 setup(
-       # the name must match the folder name 'verysimplemodule'
         name="biolith", 
         version=VERSION,
         author="Timm Haucke",
         author_email="haucke@mit.edu",
+        project_urls={
+            "Documentation": "https://timm.haucke.xyz/biolith/",
+            "Source": "https://github.com/timmh/biolith",
+        },
         description=DESCRIPTION,
         long_description=LONG_DESCRIPTION,
         long_description_content_type="text/markdown",

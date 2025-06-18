@@ -40,6 +40,9 @@ print(f"Mean true occupancy: {true_params['z'].mean():.2f}")
 ## Real-world Example
 To see a real-world example on camera trap data, see [this Jupyter Notebook](./assets/CameraTrapExample.ipynb) from the [EFI Statistical Methods Seminar Series](https://github.com/eco4cast/Statistical-Methods-Seminar-Series/tree/main/beery-haucke_biolith) or [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/timmh/biolith/blob/main/assets/CameraTrapExample.ipynb)
 
+## Documentation
+API Documentation and examples are available [here](https://timm.haucke.xyz/biolith/).
+
 ## Development
 
 Run `python -m unittest` to run unit tests.
