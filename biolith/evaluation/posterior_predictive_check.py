@@ -104,13 +104,13 @@ def posterior_predictive_check(
     E = psi[:, :, jnp.newaxis] * p.transpose((0, 2, 1))
 
     if group_by == "site":
-        # Average across the 'revisit' axis.
+        # Sum across the 'revisit' axis, imputing NaNs.
         axis_to_agg = 2
-        obs_grouped = jnp.round(jnp.nanmean(obs, axis=1) * jnp.isnan(obs).sum(axis=1))
+        obs_grouped = jnp.round(jnp.nanmean(obs, axis=1) * obs.shape[1])
     elif group_by == "revisit":
-        # Average across the 'site' axis.
+        # Sum across the 'site' axis, imputing NaNs.
         axis_to_agg = 1
-        obs_grouped = jnp.round(jnp.nanmean(obs, axis=0) * jnp.isnan(obs).sum(axis=0))
+        obs_grouped = jnp.round(jnp.nanmean(obs, axis=0) * obs.shape[0])
     else:
         raise ValueError("`group_by` must be either 'site' or 'revisit'")
 
