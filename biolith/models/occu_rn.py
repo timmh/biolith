@@ -7,6 +7,8 @@ import numpy as np
 import numpyro
 import numpyro.distributions as dist
 
+from biolith.regression import detection_linear, occupancy_linear
+
 from biolith.utils.distributions import RightTruncatedPoisson
 from biolith.utils.spatial import sample_spatial_effects, simulate_spatial_effects
 
@@ -121,7 +123,7 @@ def occu_rn(
     # Occupancy process
     abundance = numpyro.deterministic(
         "abundance",
-        jnp.exp(jnp.tile(beta[0], (n_sites,)) + jnp.dot(beta[1:], site_covs) + w),
+        jnp.exp(occupancy_linear(beta, site_covs, w)),
     )
 
     with numpyro.plate("site", n_sites, dim=-1):
@@ -137,10 +139,7 @@ def occu_rn(
             # Detection process
             r_it = numpyro.deterministic(
                 f"prob_detection",
-                jax.nn.sigmoid(
-                    jnp.tile(alpha[0], (time_periods, n_sites))
-                    + jnp.sum(alpha[1:, None, None] * obs_covs, axis=0)
-                ),
+                jax.nn.sigmoid(detection_linear(alpha, obs_covs)),
             )
             p_it = 1.0 - (1.0 - r_it) ** N_i[None, :]
 

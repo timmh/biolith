@@ -7,6 +7,8 @@ import numpy as np
 import numpyro
 import numpyro.distributions as dist
 
+from biolith.regression import detection_linear, occupancy_linear
+
 from biolith.utils.spatial import sample_spatial_effects, simulate_spatial_effects
 
 
@@ -147,9 +149,7 @@ def occu(
         # Occupancy process
         psi = numpyro.deterministic(
             "psi",
-            jax.nn.sigmoid(
-                jnp.tile(beta[0], (n_sites,)) + jnp.dot(beta[1:], site_covs) + w
-            ),
+            jax.nn.sigmoid(occupancy_linear(beta, site_covs, w)),
         )
         z = numpyro.sample(
             "z", dist.Bernoulli(probs=psi), infer={"enumerate": "parallel"}
@@ -160,10 +160,7 @@ def occu(
             # Detection process
             prob_detection = numpyro.deterministic(
                 f"prob_detection",
-                jax.nn.sigmoid(
-                    jnp.tile(alpha[0], (time_periods, n_sites))
-                    + jnp.sum(alpha[1:, None, None] * obs_covs, axis=0)
-                ),
+                jax.nn.sigmoid(detection_linear(alpha, obs_covs)),
             )
             prob_detection_fp = numpyro.deterministic(
                 "prob_detection_fp",
