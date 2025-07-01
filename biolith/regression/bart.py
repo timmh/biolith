@@ -5,26 +5,28 @@ import jax.numpy as jnp
 import numpyro
 import numpyro.distributions as dist
 from jax import lax
-from numpyro.distributions import Normal
 
 from biolith.regression.abstract import AbstractRegression
 
 
 class BARTRegression(AbstractRegression):
-    """
-    Bayesian Additive Regression Trees (BART) in NumPyro.
+    """Bayesian Additive Regression Trees (BART) in NumPyro.
 
-    This model computes a potentially linear predictor based on covariates,
-    which can be used for either occupancy or detection processes.
+    This model computes a potentially non-linear predictor based on covariates
+    which are assumed to be standard normally distributed. The sum of the tree
+    predictions follows a zero-mean normal distribution with user specified
+    standard deviation via the ``scale`` parameter.
     """
 
     def __init__(
         self,
         name: str,
         n_covs: int,
+        prior: dist.Distribution = dist.Normal(0, 1),
         n_trees: int = 50,
         max_depth: int = 2,
         k: float = 2.0,
+        scale: float = 1.0,
         alpha: float = 0.95,
         beta: float = 2.0,
     ):
@@ -36,12 +38,17 @@ class BARTRegression(AbstractRegression):
             Name of the model, used for naming the parameters.
         n_covs : int
             Number of covariates.
+        prior : dist.Distribution, optional
+            Prior distribution for the split values, by default Normal(0, 1).
         n_trees : int, optional
             Number of trees in the ensemble, by default 50.
         max_depth : int, optional
             Maximum depth of each tree, by default 2.
         k : float, optional
             Scaling factor for the prior on leaf values, by default 2.0.
+        scale : float, optional
+            Target standard deviation for the sum of tree predictions,
+            by default 1.0.
         alpha : float, optional
             Parameter for the prior on split probabilities, by default 0.95.
         beta : float, optional
@@ -51,16 +58,18 @@ class BARTRegression(AbstractRegression):
         self.n_covs = n_covs
         self.n_trees = n_trees
         self.max_depth = max_depth
+        self.k = k
+        self.scale = scale
 
         # Calculate dimensions of the full binary tree
         self.num_internal_nodes = 2**self.max_depth - 1
         self.num_nodes = 2 ** (self.max_depth + 1) - 1
 
         with numpyro.plate(f"{self.name}_trees", self.n_trees, dim=-2):
-            sigma_mu = 0.5 / (k * jnp.sqrt(self.n_trees))
+            sigma_mu = self.scale / (self.k * jnp.sqrt(self.n_trees))
             with numpyro.plate(f"{self.name}_nodes", self.num_nodes, dim=-1):
                 self.leaf_values = numpyro.sample(
-                    f"{self.name}_leaf_values", Normal(0, sigma_mu)
+                    f"{self.name}_leaf_values", dist.Normal(0, sigma_mu)
                 )
 
             depths = jnp.floor(jnp.log2(jnp.arange(1, self.num_internal_nodes + 1)))
@@ -76,9 +85,7 @@ class BARTRegression(AbstractRegression):
                     f"{self.name}_split_vars",
                     dist.Categorical(logits=jnp.zeros(self.n_covs)),
                 )
-                self.split_values = numpyro.sample(
-                    f"{self.name}_split_values", dist.Uniform(0, 1)
-                )
+                self.split_values = numpyro.sample(f"{self.name}_split_values", prior)
 
         self.compute_feature_importances()
 
@@ -133,7 +140,7 @@ class BARTRegression(AbstractRegression):
             )(jnp.arange(self.n_trees), leaf_indices_for_sample)
 
         predictions_per_tree = jax.vmap(gather_leaf_values)(leaf_indices)
-        final_prediction = jnp.sum(predictions_per_tree, axis=-1)
+        final_prediction = self.k * jnp.sum(predictions_per_tree, axis=-1)
 
         if covs.ndim == 3:
             return final_prediction.reshape(original_shape[:-1])
@@ -157,28 +164,23 @@ class TestBARTRegression(unittest.TestCase):
         from numpyro.infer import MCMC, NUTS, DiscreteHMCGibbs, Predictive
 
         rng_key = jax.random.PRNGKey(42)
-        rng_key, rng_obs, rng_inf = jax.random.split(rng_key, 3)
+        rng_key, rng_x, rng_obs, rng_inf = jax.random.split(rng_key, 4)
 
-        x_data = jnp.linspace(-jnp.pi, jnp.pi, 50)
-        y_true = jnp.sin(x_data)
+        n_samples = 50
+        x_data = jax.random.normal(rng_x, (n_samples,))[:, None]
+        y_true = jnp.sin(x_data[:, 0] * jnp.pi)
         y_obs = y_true + 0.1 * jax.random.normal(rng_obs, shape=y_true.shape)
 
-        x_min, x_max = x_data.min(), x_data.max()
-        x_scaler = lambda x: (x - x_min) / (x_max - x_min)
-
-        y_min, y_max = y_obs.min(), y_obs.max()
-        y_range = y_max - y_min
-        y_scaler = lambda y: (y - y_min) / y_range - 0.5
-        y_unscaler = lambda y_scaled: (y_scaled + 0.5) * y_range + y_min
-
-        x_train = x_scaler(x_data)[:, None]
-        y_train = y_scaler(y_obs)
+        x_train = x_data
+        y_train = y_obs
 
         def model(x, y=None):
-            bart = BARTRegression("bart", n_covs=x.shape[1], n_trees=20, max_depth=2)
+            bart = BARTRegression(
+                "bart", n_covs=x.shape[1], n_trees=20, max_depth=2, scale=1.0
+            )
             mu = bart(x)
             with numpyro.plate("data", x.shape[0]):
-                numpyro.sample("obs", Normal(mu, 0.1), obs=y)
+                numpyro.sample("obs", dist.Normal(mu, 0.1), obs=y)
 
         kernel = DiscreteHMCGibbs(NUTS(model))
         mcmc = MCMC(kernel, num_warmup=500, num_samples=500)
@@ -187,10 +189,9 @@ class TestBARTRegression(unittest.TestCase):
         predictive = Predictive(model, mcmc.get_samples())
         samples = predictive(rng_key, x_train)
 
-        preds_scaled = jnp.mean(samples["obs"], axis=0)
-        preds_unscaled = y_unscaler(preds_scaled)
+        preds = jnp.mean(samples["obs"], axis=0)
 
-        mae = jnp.mean(jnp.abs(preds_unscaled - y_obs))
+        mae = jnp.mean(jnp.abs(preds - y_obs))
         self.assertTrue(
             mae < 0.3, f"Mean Absolute Error should be < 0.3, but was {mae:.4f}"
         )
@@ -199,22 +200,19 @@ class TestBARTRegression(unittest.TestCase):
         try:
             import matplotlib.pyplot as plt
 
-            unscaled_samples = y_unscaler(samples["obs"])
-            ci_lower = jnp.percentile(unscaled_samples, 5, axis=0)
-            ci_upper = jnp.percentile(unscaled_samples, 95, axis=0)
-            sort_indices = jnp.argsort(x_data)
-            x_data_sorted = x_data[sort_indices]
+            ci_lower = jnp.percentile(samples["obs"], 5, axis=0)
+            ci_upper = jnp.percentile(samples["obs"], 95, axis=0)
+            sort_indices = jnp.argsort(x_data[:, 0])
+            x_data_sorted = x_data[sort_indices, 0]
             y_obs_sorted = y_obs[sort_indices]
             y_true_sorted = y_true[sort_indices]
-            preds_unscaled_sorted = preds_unscaled[sort_indices]
+            preds_sorted = preds[sort_indices]
             ci_lower_sorted = ci_lower[sort_indices]
             ci_upper_sorted = ci_upper[sort_indices]
             plt.figure(figsize=(10, 6))
             plt.scatter(x_data_sorted, y_obs_sorted, label="Simulated Data", alpha=0.6)
             plt.plot(x_data_sorted, y_true_sorted, "g-", label="True Function")
-            plt.plot(
-                x_data_sorted, preds_unscaled_sorted, "r-", label="Mean Prediction"
-            )
+            plt.plot(x_data_sorted, preds_sorted, "r-", label="Mean Prediction")
             plt.fill_between(
                 x_data_sorted,
                 ci_lower_sorted,
@@ -236,31 +234,29 @@ class TestBARTRegression(unittest.TestCase):
         from numpyro.infer import MCMC, NUTS, DiscreteHMCGibbs, Predictive
 
         rng_key = jax.random.PRNGKey(42)
-        rng_key, rng_nuisance, rng_obs, rng_inf = jax.random.split(rng_key, 4)
+        rng_key, rng_cov1, rng_cov2, rng_obs, rng_inf = jax.random.split(rng_key, 5)
 
+        n_samples = 50
         x_data = jnp.stack(
-            [jnp.linspace(-jnp.pi, jnp.pi, 50), jax.random.normal(rng_nuisance, (50))],
+            [
+                jax.random.normal(rng_cov1, (n_samples,)),
+                jax.random.normal(rng_cov2, (n_samples,)),
+            ],
             axis=1,
         )
-        y_true = jnp.sin(x_data[:, 0])
+        y_true = jnp.sin(x_data[:, 0] * jnp.pi)
         y_obs = y_true + 0.1 * jax.random.normal(rng_obs, shape=y_true.shape)
 
-        x_min, x_max = x_data.min(), x_data.max()
-        x_scaler = lambda x: (x - x_min) / (x_max - x_min)
-
-        y_min, y_max = y_obs.min(), y_obs.max()
-        y_range = y_max - y_min
-        y_scaler = lambda y: (y - y_min) / y_range - 0.5
-        y_unscaler = lambda y_scaled: (y_scaled + 0.5) * y_range + y_min
-
-        x_train = x_scaler(x_data)
-        y_train = y_scaler(y_obs)
+        x_train = x_data
+        y_train = y_obs
 
         def model(x, y=None):
-            bart = BARTRegression("bart", n_covs=x.shape[1], n_trees=20, max_depth=2)
+            bart = BARTRegression(
+                "bart", n_covs=x.shape[1], n_trees=20, max_depth=2, scale=1.0
+            )
             mu = bart(x)
             with numpyro.plate("data", x.shape[0]):
-                numpyro.sample("obs", Normal(mu, 0.1), obs=y)
+                numpyro.sample("obs", dist.Normal(mu, 0.1), obs=y)
 
         kernel = DiscreteHMCGibbs(NUTS(model))
         mcmc = MCMC(kernel, num_warmup=500, num_samples=500)
@@ -269,10 +265,9 @@ class TestBARTRegression(unittest.TestCase):
         predictive = Predictive(model, mcmc.get_samples())
         samples = predictive(rng_key, x_train)
 
-        preds_scaled = jnp.mean(samples["obs"], axis=0)
-        preds_unscaled = y_unscaler(preds_scaled)
+        preds = jnp.mean(samples["obs"], axis=0)
 
-        mae = jnp.mean(jnp.abs(preds_unscaled - y_obs))
+        mae = jnp.mean(jnp.abs(preds - y_obs))
         self.assertTrue(
             mae < 0.3, f"Mean Absolute Error should be < 0.3, but was {mae:.4f}"
         )
