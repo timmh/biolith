@@ -1,3 +1,5 @@
-from .linear import occupancy_linear, detection_linear
+from .abstract import AbstractRegression
+from .linear import LinearRegression
+from .mlp import MLPRegression
 
-__all__ = ["occupancy_linear", "detection_linear"]
+__all__ = ["AbstractRegression", "LinearRegression", "MLPRegression"]

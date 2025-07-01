@@ -1,5 +1,5 @@
 import unittest
-from typing import List, Optional
+from typing import Type, Optional
 
 import jax
 import jax.numpy as jnp
@@ -7,8 +7,7 @@ import numpy as np
 import numpyro
 import numpyro.distributions as dist
 
-from biolith.regression import detection_linear, occupancy_linear
-
+from biolith.regression import AbstractRegression, LinearRegression
 from biolith.utils.distributions import RightTruncatedPoisson
 from biolith.utils.spatial import sample_spatial_effects, simulate_spatial_effects
 
@@ -23,6 +22,8 @@ def occu_rn(
     obs: Optional[jnp.ndarray] = None,
     prior_beta: dist.Distribution = dist.Normal(),
     prior_alpha: dist.Distribution = dist.Normal(),
+    regressor_abu: Type[AbstractRegression] = LinearRegression,
+    regressor_det: Type[AbstractRegression] = LinearRegression,
     prior_prob_fp_constant: dist.Distribution = dist.Beta(2, 5),
     prior_gp_sd: dist.Distribution = dist.HalfNormal(1.0),
     prior_gp_length: dist.Distribution = dist.HalfNormal(1.0),
@@ -53,6 +54,10 @@ def occu_rn(
         Prior distribution for the site-level regression coefficients.
     prior_alpha : numpyro.distributions.Distribution
         Prior distribution for the observation-level regression coefficients.
+    regressor_abu : Type[AbstractRegression]
+        Class for the abundance regression model, defaults to LinearRegression.
+    regressor_det : Type[AbstractRegression]
+        Class for the detection regression model, defaults to LinearRegression.
     prior_prob_fp_constant : numpyro.distributions.Distribution
         Prior distribution for the constant false positive rate.
     prior_prob_fp_unoccupied : numpyro.distributions.Distribution
@@ -101,9 +106,9 @@ def occu_rn(
         else 0
     )
 
-    # Abundance and detection covariates
-    beta = numpyro.sample("beta", prior_beta.expand([n_site_covs + 1]).to_event(1))
-    alpha = numpyro.sample("alpha", prior_alpha.expand([n_obs_covs + 1]).to_event(1))
+    # Abundance and detection regression models
+    reg_abu = regressor_abu("beta", n_site_covs, prior=prior_beta)
+    reg_det = regressor_det("alpha", n_obs_covs, prior=prior_alpha)
 
     if coords is not None:
         w = sample_spatial_effects(
@@ -123,7 +128,7 @@ def occu_rn(
     # Occupancy process
     abundance = numpyro.deterministic(
         "abundance",
-        jnp.exp(occupancy_linear(beta, site_covs, w)),
+        jnp.exp(reg_abu(site_covs) + w),
     )
 
     with numpyro.plate("site", n_sites, dim=-1):
@@ -139,7 +144,7 @@ def occu_rn(
             # Detection process
             r_it = numpyro.deterministic(
                 f"prob_detection",
-                jax.nn.sigmoid(detection_linear(alpha, obs_covs)),
+                jax.nn.sigmoid(reg_det(obs_covs)),
             )
             p_it = 1.0 - (1.0 - r_it) ** N_i[None, :]
 

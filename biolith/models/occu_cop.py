@@ -1,5 +1,5 @@
 import unittest
-from typing import List, Optional
+from typing import Type, Optional
 
 import jax
 import jax.numpy as jnp
@@ -7,8 +7,7 @@ import numpy as np
 import numpyro
 import numpyro.distributions as dist
 
-from biolith.regression import detection_linear, occupancy_linear
-
+from biolith.regression import AbstractRegression, LinearRegression
 from biolith.utils.spatial import sample_spatial_effects, simulate_spatial_effects
 
 
@@ -23,6 +22,8 @@ def occu_cop(
     obs: Optional[jnp.ndarray] = None,
     prior_beta: dist.Distribution = dist.Normal(),
     prior_alpha: dist.Distribution = dist.Normal(),
+    regressor_occ: Type[AbstractRegression] = LinearRegression,
+    regressor_det: Type[AbstractRegression] = LinearRegression,
     prior_rate_fp_constant: dist.Distribution = dist.Exponential(),
     prior_rate_fp_unoccupied: dist.Distribution = dist.Exponential(),
     prior_gp_sd: dist.Distribution = dist.HalfNormal(1.0),
@@ -57,6 +58,10 @@ def occu_cop(
         Prior distribution for occupancy coefficients.
     prior_alpha : dist.Distribution
         Prior distribution for detection coefficients.
+    regressor_occ : Type[AbstractRegression]
+        Class for the occupancy regression model, defaults to LinearRegression.
+    regressor_det : Type[AbstractRegression]
+        Class for the detection regression model, defaults to LinearRegression.
     prior_rate_fp_constant : dist.Distribution
         Prior for the constant false positive rate parameter.
     prior_rate_fp_unoccupied : dist.Distribution
@@ -134,9 +139,9 @@ def occu_cop(
         else 0
     )
 
-    # Occupancy and detection covariates
-    beta = numpyro.sample("beta", prior_beta.expand([n_site_covs + 1]).to_event(1))
-    alpha = numpyro.sample("alpha", prior_alpha.expand([n_obs_covs + 1]).to_event(1))
+    # Occupancy and detection regression models
+    reg_occ = regressor_occ("beta", n_site_covs, prior=prior_beta)
+    reg_det = regressor_det("alpha", n_obs_covs, prior=prior_alpha)
 
     if coords is not None:
         w = sample_spatial_effects(
@@ -159,7 +164,7 @@ def occu_cop(
         # Occupancy process
         psi = numpyro.deterministic(
             "psi",
-            jax.nn.sigmoid(occupancy_linear(beta, site_covs, w)),
+            jax.nn.sigmoid(reg_occ(site_covs) + w),
         )
         z = numpyro.sample(
             "z", dist.Bernoulli(probs=psi), infer={"enumerate": "parallel"}
@@ -170,7 +175,7 @@ def occu_cop(
             # Detection process
             rate_detection = numpyro.deterministic(
                 f"rate_detection",
-                jnp.exp(detection_linear(alpha, obs_covs)),
+                jnp.exp(reg_det(obs_covs)),
             )
             l_det = z * rate_detection + (1 - z) * rate_fp_unoccupied + rate_fp_constant
 

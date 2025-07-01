@@ -1,49 +1,70 @@
-"""Helper functions for linear predictors used in occupancy models."""
-from __future__ import annotations
-
-from typing import Optional
-
+import unittest
+import numpyro
+from numpyro.distributions import Distribution, Normal
+import jax
 import jax.numpy as jnp
 
+from biolith.regression.abstract import AbstractRegression
 
-def occupancy_linear(beta: jnp.ndarray, site_covs: jnp.ndarray, w: Optional[jnp.ndarray] = None) -> jnp.ndarray:
-    """Compute the occupancy linear predictor.
 
-    Parameters
-    ----------
-    beta : jnp.ndarray
-        Regression coefficients of shape (n_covs + 1,).
-    site_covs : jnp.ndarray
-        Site covariate matrix of shape (n_covs, n_sites).
-    w : Optional[jnp.ndarray]
-        Optional spatial random effect of shape (n_sites,).
-
-    Returns
-    -------
-    jnp.ndarray
-        Linear predictor of shape (n_sites,).
+class LinearRegression(AbstractRegression):
     """
-    lin = jnp.tile(beta[0], (site_covs.shape[-1],)) + jnp.dot(beta[1:], site_covs)
-    if w is not None:
-        lin = lin + w
-    return lin
+    Linear regression model for occupancy or detection in an occupancy model.
 
-
-def detection_linear(alpha: jnp.ndarray, obs_covs: jnp.ndarray) -> jnp.ndarray:
-    """Compute the detection linear predictor.
-
-    Parameters
-    ----------
-    alpha : jnp.ndarray
-        Regression coefficients of shape (n_covs + 1,).
-    obs_covs : jnp.ndarray
-        Observation covariate tensor of shape (n_covs, time_periods, n_sites).
-
-    Returns
-    -------
-    jnp.ndarray
-        Linear predictor of shape (time_periods, n_sites).
+    This model computes a linear predictor based on covariates, which can be used
+    for either occupancy or detection processes.
     """
-    return jnp.tile(alpha[0], (obs_covs.shape[1], obs_covs.shape[2])) + jnp.sum(
-        alpha[1:, None, None] * obs_covs, axis=0
-    )
+    def __init__(self, name: str, n_covs: int, prior: Distribution = Normal(0, 1)):
+        self.coef = numpyro.sample(name, prior.expand([n_covs + 1]).to_event(1))
+
+    def __call__(self, covs: jnp.ndarray) -> jnp.ndarray:
+        """Compute the linear predictor for occupancy or detection.
+
+        Parameters
+        ----------
+        covs : jnp.ndarray
+            Site covariate matrix of shape (n_covs, n_sites) or observation covariate matrix of shape (n_covs, n_revisits, n_sites).
+
+        Returns
+        -------
+        jnp.ndarray
+            Linear predictor of shape (n_sites,) or of shape (n_revisits, n_sites).
+        """
+        if covs.ndim == 2:
+            return jnp.tile(self.coef[0], (covs.shape[-1],)) + jnp.dot(self.coef[1:], covs)
+        elif covs.ndim == 3:
+            return jnp.tile(self.coef[0], (covs.shape[1], covs.shape[2])) + jnp.sum(
+                self.coef[1:, None, None] * covs, axis=0
+            )
+        else:
+            raise ValueError(f"Invalid covariate shape: {covs.shape}. Expected 2D or 3D array.")
+        
+
+
+class TestLinearRegression(unittest.TestCase):
+    def test_linear_regression(self):
+        from numpyro.infer import MCMC, NUTS
+
+        rng = jax.random.PRNGKey(0)
+        x_data = jnp.linspace(-1, 1, 50)
+        true_params = jnp.array([1.0, 2.0])
+        y_true = true_params[0] + true_params[1] * x_data
+        y_obs = y_true + 0.1 * jax.random.normal(rng, shape=y_true.shape)
+
+        def model(x, y=None):
+            lr = LinearRegression("coef", n_covs=1)
+            mu = lr(x[None, :])
+            numpyro.sample("obs", Normal(mu, 0.1), obs=y)
+
+        mcmc = MCMC(NUTS(model), num_warmup=100, num_samples=100)
+        mcmc.run(rng, x_data, y_obs)
+        
+        predictive = numpyro.infer.Predictive(model, mcmc.get_samples())
+        samples = predictive(rng, x_data)
+        
+        preds = jnp.mean(samples["obs"], axis=0)
+        self.assertTrue(jnp.mean(jnp.abs(preds - y_obs)) < 0.3)
+
+
+if __name__ == "__main__":
+    unittest.main()
