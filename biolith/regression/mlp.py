@@ -20,7 +20,7 @@ class MLPRegression(AbstractRegression):
         self,
         name: str,
         n_covs: int,
-        hidden_layer_sizes: list[int],
+        hidden_layer_sizes: list[int] = [10, 10],
         prior: Distribution = Normal(0, 1),
     ):
         """Initialize the MLP regression model and sample its parameters.

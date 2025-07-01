@@ -646,6 +646,26 @@ class TestOccu(unittest.TestCase):
         # Test residuals
         residuals(posterior_samples, data["obs"])
 
+    def test_regression_methods(self):
+        from biolith.regression import (
+            BARTRegression,
+            LinearRegression,
+            MLPRegression,
+        )
+        from biolith.utils import fit
+
+        data, true_params = simulate(simulate_missing=True)
+
+        for reg_class in [LinearRegression, MLPRegression, BARTRegression]:
+            results = fit(
+                occu, **data, regressor_occ=reg_class, num_chains=1, timeout=600
+            )
+            self.assertTrue(
+                np.allclose(
+                    results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1
+                )
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
