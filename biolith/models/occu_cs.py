@@ -1,5 +1,5 @@
 import unittest
-from typing import Type, Optional, Tuple
+from typing import Optional, Tuple, Type
 
 import jax
 import jax.numpy as jnp
@@ -148,10 +148,7 @@ def occu_cs(
             # Detection process
             f = numpyro.sample(
                 "f",
-                dist.Bernoulli(
-                    z
-                    * jax.nn.sigmoid(reg_det(obs_covs))
-                ),
+                dist.Bernoulli(z * jax.nn.sigmoid(reg_det(obs_covs))),
                 infer={"enumerate": "parallel"},
             )
 

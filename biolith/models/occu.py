@@ -1,5 +1,5 @@
 import unittest
-from typing import Type, Optional
+from typing import Optional, Type
 
 import jax
 import jax.numpy as jnp
