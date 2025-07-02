@@ -22,18 +22,23 @@ def diagnostics(mcmc: MCMC, exclude_deterministic=True):
     # Compute summary statistics (includes mean, std, quantiles, R-hat, and ESS)
     summary_dict = summary(sites)
 
-    mean_r_hat = sum([v["r_hat"] for v in summary_dict.values()]) / len(summary_dict)
+    mean_r_hat = sum([v["r_hat"].mean().item() for v in summary_dict.values()]) / len(
+        summary_dict
+    )
     mean_frac_eff = (
-        sum([v["n_eff"] for v in summary_dict.values()])
+        sum([v["n_eff"].mean().item() for v in summary_dict.values()])
         / len(summary_dict)
         / (mcmc.num_samples * mcmc.num_chains)
     )
 
     diagnostics = mcmc.get_extra_fields()
 
-    frac_diverging = jnp.sum(diagnostics["diverging"]).item() / (
-        mcmc.num_samples * mcmc.num_chains
-    )
+    if diagnostics is not None and "diverging" in diagnostics:
+        frac_diverging = jnp.sum(diagnostics["diverging"]).item() / (
+            mcmc.num_samples * mcmc.num_chains
+        )
+    else:
+        frac_diverging = float("nan")
 
     return dict(
         mean_r_hat=mean_r_hat,
