@@ -65,25 +65,30 @@ class BARTRegression(AbstractRegression):
         self.num_internal_nodes = 2**self.max_depth - 1
         self.num_nodes = 2 ** (self.max_depth + 1) - 1
 
+        sigma_mu = self.scale / (self.k * jnp.sqrt(self.n_trees))
+
         with numpyro.plate(f"{self.name}_trees", self.n_trees, dim=-2):
-            sigma_mu = self.scale / (self.k * jnp.sqrt(self.n_trees))
             with numpyro.plate(f"{self.name}_nodes", self.num_nodes, dim=-1):
                 self.leaf_values = numpyro.sample(
                     f"{self.name}_leaf_values", dist.Normal(0, sigma_mu)
                 )
 
-            depths = jnp.floor(jnp.log2(jnp.arange(1, self.num_internal_nodes + 1)))
-            split_probs = alpha * (1 + depths) ** (-beta)
+        depths = jnp.floor(jnp.log2(jnp.arange(1, self.num_internal_nodes + 1)))
+        split_probs = alpha * (1 + depths) ** (-beta)
+
+        with numpyro.plate(f"{self.name}_trees", self.n_trees, dim=-2):
             with numpyro.plate(
                 f"{self.name}_internal_nodes", self.num_internal_nodes, dim=-1
             ):
                 self.is_split_node = numpyro.sample(
                     f"{self.name}_is_split",
                     dist.Bernoulli(split_probs),
+                    infer={"enumerate": None},
                 )
                 self.split_vars = numpyro.sample(
                     f"{self.name}_split_vars",
                     dist.Categorical(logits=jnp.zeros(self.n_covs)),
+                    infer={"enumerate": None},
                 )
                 self.split_values = numpyro.sample(f"{self.name}_split_values", prior)
 
@@ -107,6 +112,9 @@ class BARTRegression(AbstractRegression):
                 f"Invalid covariate shape: {covs.shape}. Expected 2D or 3D array."
             )
 
+        # change order of dimensions in covs to (n_sites, n_covs) or (n_sites, n_revisits, n_covs)
+        covs = covs.transpose((2, 1, 0)) if covs.ndim == 3 else covs.transpose((1, 0))
+
         original_shape = covs.shape
         covs_flat = covs.reshape(-1, original_shape[-1]) if covs.ndim == 3 else covs
 
@@ -128,10 +136,15 @@ class BARTRegression(AbstractRegression):
 
             return lax.fori_loop(0, self.max_depth, body_fun, 0)
 
+        # Use the original parameter arrays directly without trying to handle enumeration
+        is_split_node = self.is_split_node
+        split_vars = self.split_vars
+        split_values = self.split_values
+
         leaf_indices = jax.vmap(
             lambda x: jax.vmap(
                 get_leaf_idx_for_sample_and_tree, in_axes=(None, 0, 0, 0)
-            )(x, self.is_split_node, self.split_vars, self.split_values)
+            )(x, is_split_node, split_vars, split_values)
         )(covs_flat)
 
         def gather_leaf_values(leaf_indices_for_sample):
@@ -143,7 +156,7 @@ class BARTRegression(AbstractRegression):
         final_prediction = self.k * jnp.sum(predictions_per_tree, axis=-1)
 
         if covs.ndim == 3:
-            return final_prediction.reshape(original_shape[:-1])
+            return final_prediction.reshape((original_shape[1], original_shape[0]))
         return final_prediction
 
     def compute_feature_importances(self) -> None:
@@ -167,8 +180,8 @@ class TestBARTRegression(unittest.TestCase):
         rng_key, rng_x, rng_obs, rng_inf = jax.random.split(rng_key, 4)
 
         n_samples = 50
-        x_data = jax.random.normal(rng_x, (n_samples,))[:, None]
-        y_true = jnp.sin(x_data[:, 0] * jnp.pi)
+        x_data = jax.random.normal(rng_x, (n_samples,))[None, :]
+        y_true = jnp.sin(x_data[0, :] * jnp.pi)
         y_obs = y_true + 0.1 * jax.random.normal(rng_obs, shape=y_true.shape)
 
         x_train = x_data
@@ -176,10 +189,10 @@ class TestBARTRegression(unittest.TestCase):
 
         def model(x, y=None):
             bart = BARTRegression(
-                "bart", n_covs=x.shape[1], n_trees=20, max_depth=2, scale=1.0
+                "bart", n_covs=x.shape[0], n_trees=20, max_depth=2, scale=1.0
             )
             mu = bart(x)
-            with numpyro.plate("data", x.shape[0]):
+            with numpyro.plate("data", x.shape[1]):
                 numpyro.sample("obs", dist.Normal(mu, 0.1), obs=y)
 
         kernel = DiscreteHMCGibbs(NUTS(model))
@@ -202,8 +215,8 @@ class TestBARTRegression(unittest.TestCase):
 
             ci_lower = jnp.percentile(samples["obs"], 5, axis=0)
             ci_upper = jnp.percentile(samples["obs"], 95, axis=0)
-            sort_indices = jnp.argsort(x_data[:, 0])
-            x_data_sorted = x_data[sort_indices, 0]
+            sort_indices = jnp.argsort(x_data[0, :])
+            x_data_sorted = x_data[0, sort_indices]
             y_obs_sorted = y_obs[sort_indices]
             y_true_sorted = y_true[sort_indices]
             preds_sorted = preds[sort_indices]
@@ -242,9 +255,9 @@ class TestBARTRegression(unittest.TestCase):
                 jax.random.normal(rng_cov1, (n_samples,)),
                 jax.random.normal(rng_cov2, (n_samples,)),
             ],
-            axis=1,
+            axis=0,
         )
-        y_true = jnp.sin(x_data[:, 0] * jnp.pi)
+        y_true = jnp.sin(x_data[0, :] * jnp.pi)
         y_obs = y_true + 0.1 * jax.random.normal(rng_obs, shape=y_true.shape)
 
         x_train = x_data
@@ -252,10 +265,10 @@ class TestBARTRegression(unittest.TestCase):
 
         def model(x, y=None):
             bart = BARTRegression(
-                "bart", n_covs=x.shape[1], n_trees=20, max_depth=2, scale=1.0
+                "bart", n_covs=x.shape[0], n_trees=20, max_depth=2, scale=1.0
             )
             mu = bart(x)
-            with numpyro.plate("data", x.shape[0]):
+            with numpyro.plate("data", x.shape[1]):
                 numpyro.sample("obs", dist.Normal(mu, 0.1), obs=y)
 
         kernel = DiscreteHMCGibbs(NUTS(model))

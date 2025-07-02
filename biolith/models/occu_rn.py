@@ -125,13 +125,13 @@ def occu_rn(
     obs_covs = obs_covs.transpose((2, 1, 0))
     obs = obs.transpose((1, 0)) if obs is not None else None
 
-    # Occupancy process
-    abundance = numpyro.deterministic(
-        "abundance",
-        jnp.exp(reg_abu(site_covs) + w),
-    )
-
     with numpyro.plate("site", n_sites, dim=-1):
+
+        # Occupancy process
+        abundance = numpyro.deterministic(
+            "abundance",
+            jnp.exp(reg_abu(site_covs) + w),
+        )
 
         N_i = numpyro.sample(
             "N_i",

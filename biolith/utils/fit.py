@@ -1,8 +1,10 @@
 from collections import namedtuple
-from typing import Literal
+from typing import Literal, Optional
 
 import jax
 from numpyro.infer import HMC, HMCECS, MCMC, NUTS, DiscreteHMCGibbs, MixedHMC
+
+from biolith.regression.bart import BARTRegression
 
 from .data import dataframes_to_arrays, rename_samples
 
@@ -19,9 +21,9 @@ def fit(
     num_warmup: int = 1000,
     random_seed: int = 0,
     num_chains: int = 5,
-    kernel: Literal[
-        "nuts", "hmc", "mixed_hmc", "discrete_hmc_gibbs", "hmcecs"
-    ] = "nuts",
+    kernel: Optional[
+        Literal["nuts", "hmc", "mixed_hmc", "discrete_hmc_gibbs", "hmcecs"]
+    ] = None,
     timeout: int | None = None,
     **kwargs,
 ) -> FitResult:
@@ -50,7 +52,7 @@ def fit(
     kernel:
         Name of the sampling kernel to use. Possible values include
         ``"nuts"``, ``"hmc"``, ``"mixed_hmc"``, ``"discrete_hmc_gibbs"``,
-        or ``"hmcecs"``.
+        or ``"hmcecs"``. Defaults to ``"nuts"`` for most models.
     timeout:
         Optional timeout (in seconds) for the sampling step.
     **kwargs:
@@ -73,6 +75,13 @@ def fit(
     site_covs, obs_covs, obs, session_duration, site_covs_names, obs_covs_names = (
         dataframes_to_arrays(site_covs, obs_covs, obs, session_duration)
     )
+
+    if kernel is None:
+        kernel = "nuts"
+
+        # check if one of the arguments to the model is a RegressionModel that required discrete parameters
+        if any([arg is BARTRegression for arg in kwargs.values()]):
+            kernel = "discrete_hmc_gibbs"
 
     kernel_inst = dict(
         nuts=lambda: NUTS(model_fn),

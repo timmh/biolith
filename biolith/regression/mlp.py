@@ -40,13 +40,17 @@ class MLPRegression(AbstractRegression):
         self.biases = []
         in_features = n_covs
         for i, h in enumerate(hidden_layer_sizes):
-            w = numpyro.sample(f"{name}_w_h{i}", prior.expand([in_features, h]))
-            b = numpyro.sample(f"{name}_b_h{i}", prior.expand([h]))
+            w = numpyro.sample(
+                f"{name}_w_h{i}", prior.expand([in_features, h]).to_event(2)
+            )
+            b = numpyro.sample(f"{name}_b_h{i}", prior.expand([h]).to_event(1))
             self.weights.append(w)
             self.biases.append(b)
             in_features = h
-        w_out = numpyro.sample(f"{name}_w_out", prior.expand([in_features, 1]))
-        b_out = numpyro.sample(f"{name}_b_out", prior.expand([1]))
+        w_out = numpyro.sample(
+            f"{name}_w_out", prior.expand([in_features, 1]).to_event(2)
+        )
+        b_out = numpyro.sample(f"{name}_b_out", prior.expand([1]).to_event(1))
         self.weights.append(w_out)
         self.biases.append(b_out)
 
