@@ -628,7 +628,12 @@ class TestOccu(unittest.TestCase):
         results = fit(occu, **data, timeout=600)
         posterior_samples = predict(occu, results.mcmc, **data)
 
-        from biolith.evaluation import lppd, posterior_predictive_check, residuals
+        from biolith.evaluation import (
+            diagnostics,
+            lppd,
+            posterior_predictive_check,
+            residuals,
+        )
 
         # Test log pointwise predictive density (lppd)
         lppd(occu, posterior_samples, **data)
@@ -645,6 +650,9 @@ class TestOccu(unittest.TestCase):
 
         # Test residuals
         residuals(posterior_samples, data["obs"])
+
+        # Test diagnostics
+        diagnostics(results.mcmc)
 
     def test_regression_methods(self):
         from biolith.regression import (
