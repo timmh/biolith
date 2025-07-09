@@ -41,8 +41,7 @@ def posterior_predictive_check(
             - 'prob_detection': Posterior samples for the detection probability. This is
                    necessary to compute the expected values for the GOF tests.
                    Shape: (num_samples, num_sites, num_revisits).
-        obs (jnp.ndarray): Ground truth observations on an unobserved test set.
-                           Shape: (num_sites, num_revisits).
+        obs (jnp.ndarray): Ground truth observations of shape (n_sites, n_visits).
         group_by (str): Specifies how to aggregate the data for the test
                         statistic. Must be either 'site' or 'revisit'.
         statistic (str): The discrepancy statistic to use for the comparison.

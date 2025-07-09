@@ -629,6 +629,7 @@ class TestOccu(unittest.TestCase):
         posterior_samples = predict(occu, results.mcmc, **data)
 
         from biolith.evaluation import (
+            deviance,
             diagnostics,
             lppd,
             posterior_predictive_check,
@@ -650,6 +651,9 @@ class TestOccu(unittest.TestCase):
 
         # Test residuals
         residuals(posterior_samples, data["obs"])
+
+        # Test deviance
+        deviance(posterior_samples, data["obs"])
 
         # Test diagnostics
         diagnostics(results.mcmc)

@@ -22,8 +22,7 @@ def residuals(
         posterior_samples: A dictionary containing posterior samples from a fitted model.
                           Must include 'z' (latent occupancy state), 'psi'
                           (occupancy probability), and 'prob_detection' (detection probability).
-        obs: The original 2D observation data array of shape (n_sites, n_visits)
-             used to fit the model.
+        obs: Ground truth observations of shape (n_sites, n_visits).
 
     Returns
     -------
