@@ -1,3 +1,5 @@
+from typing import Callable
+
 import jax
 from numpyro.infer import Predictive
 
@@ -5,7 +7,7 @@ from .data import dataframes_to_arrays, rename_samples
 
 
 def predict(
-    model_fn: callable,
+    model_fn: Callable,
     mcmc,
     site_covs=None,
     obs_covs=None,

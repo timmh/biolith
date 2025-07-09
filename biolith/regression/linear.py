@@ -44,12 +44,12 @@ class LinearRegression(AbstractRegression):
             Linear predictor of shape (n_sites,) or of shape (n_revisits, n_sites).
         """
         if covs.ndim == 2:
-            return jnp.tile(self.coef[0], (covs.shape[-1],)) + jnp.dot(
-                self.coef[1:], covs
+            return jnp.tile(self.coef[0], (covs.shape[-1],)) + jnp.dot(  # type: ignore
+                self.coef[1:], covs  # type: ignore
             )
         elif covs.ndim == 3:
-            return jnp.tile(self.coef[0], (covs.shape[1], covs.shape[2])) + jnp.sum(
-                self.coef[1:, None, None] * covs, axis=0
+            return jnp.tile(self.coef[0], (covs.shape[1], covs.shape[2])) + jnp.sum(  # type: ignore
+                self.coef[1:, None, None] * covs, axis=0  # type: ignore
             )
         else:
             raise ValueError(
@@ -70,7 +70,7 @@ class TestLinearRegression(unittest.TestCase):
         def model(x, y=None):
             lr = LinearRegression("coef", n_covs=1)
             mu = lr(x[None, :])
-            numpyro.sample("obs", Normal(mu, 0.1), obs=y)
+            numpyro.sample("obs", Normal(mu, 0.1), obs=y)  # type: ignore
 
         mcmc = MCMC(NUTS(model), num_warmup=100, num_samples=100)
         mcmc.run(rng, x_data, y_obs)

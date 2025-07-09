@@ -116,7 +116,7 @@ def posterior_predictive_check(
 
     # Create a mask for non-missing observations
     obs_mask = jnp.isfinite(obs)
-    
+
     if group_by == "site":
         # Sum across the 'revisit' axis, only including non-missing observations
         y_rep_grouped = jnp.where(obs_mask[None, :, :], y_rep, 0).sum(axis=axis_to_agg)

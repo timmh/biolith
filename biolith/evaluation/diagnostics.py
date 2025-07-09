@@ -7,7 +7,7 @@ from numpyro.infer import MCMC
 
 def diagnostics(mcmc: MCMC, exclude_deterministic=True):
 
-    sites = mcmc._states[mcmc._sample_field]
+    sites = mcmc._states[mcmc._sample_field]  # type: ignore
     if isinstance(sites, dict) and exclude_deterministic:
 
         state_sample_field = attrgetter(mcmc._sample_field)(mcmc._last_state)
@@ -15,7 +15,7 @@ def diagnostics(mcmc: MCMC, exclude_deterministic=True):
         if isinstance(state_sample_field, dict):
             sites = {
                 k: v
-                for k, v in mcmc._states[mcmc._sample_field].items()
+                for k, v in mcmc._states[mcmc._sample_field].items()  # type: ignore
                 if k in state_sample_field
             }
 

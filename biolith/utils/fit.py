@@ -1,5 +1,5 @@
 from collections import namedtuple
-from typing import Literal, Optional
+from typing import Callable, Literal, Optional
 
 import jax
 from numpyro.infer import HMC, HMCECS, MCMC, NUTS, DiscreteHMCGibbs, MixedHMC
@@ -12,7 +12,7 @@ FitResult = namedtuple("FitResult", ["samples", "mcmc"])
 
 
 def fit(
-    model_fn: callable,
+    model_fn: Callable,
     site_covs=None,
     obs_covs=None,
     obs=None,

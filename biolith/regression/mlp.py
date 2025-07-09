@@ -94,7 +94,7 @@ class TestMLPRegression(unittest.TestCase):
         def model(x, y=None):
             lr = MLPRegression("mlp", n_covs=1, hidden_layer_sizes=[5, 5])
             mu = lr(x[None, :])
-            numpyro.sample("obs", Normal(mu, 0.1), obs=y)
+            numpyro.sample("obs", Normal(mu, 0.1), obs=y)  # type: ignore
 
         mcmc = MCMC(NUTS(model), num_warmup=100, num_samples=100)
         mcmc.run(rng, x_data, y_obs)

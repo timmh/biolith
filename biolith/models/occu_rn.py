@@ -135,7 +135,7 @@ def occu_rn(
 
         N_i = numpyro.sample(
             "N_i",
-            RightTruncatedPoisson(abundance, max_cutoff=max_abundance),
+            RightTruncatedPoisson(abundance, max_cutoff=max_abundance),  # type: ignore
             infer={"enumerate": "parallel"},
         )
 
@@ -146,20 +146,20 @@ def occu_rn(
                 f"prob_detection",
                 jax.nn.sigmoid(reg_det(obs_covs)),
             )
-            p_it = 1.0 - (1.0 - r_it) ** N_i[None, :]
+            p_it = 1.0 - (1.0 - r_it) ** N_i[None, :]  # type: ignore
 
             if obs is not None:
                 with numpyro.handlers.mask(mask=jnp.isfinite(obs)):
                     numpyro.sample(
                         "y",
-                        dist.Bernoulli(1 - (1 - p_it) * (1 - prob_fp_constant)),
+                        dist.Bernoulli(1 - (1 - p_it) * (1 - prob_fp_constant)),  # type: ignore
                         obs=jnp.nan_to_num(obs),
                         infer={"enumerate": "parallel"},
                     )
             else:
                 numpyro.sample(
                     "y",
-                    dist.Bernoulli(1 - (1 - p_it) * (1 - prob_fp_constant)),
+                    dist.Bernoulli(1 - (1 - p_it) * (1 - prob_fp_constant)),  # type: ignore
                     infer={"enumerate": "parallel"},
                 )
 
@@ -221,7 +221,7 @@ def simulate_rn(
         # Generate occupancy and site-level covariates
         site_covs = rng.normal(size=(n_sites, n_site_covs))
 
-        if spatial:
+        if spatial and coords is not None:
             w, ell = simulate_spatial_effects(coords, gp_sd=gp_sd, gp_l=gp_l, rng=rng)
         else:
             w, ell = np.zeros(n_sites), 0.0

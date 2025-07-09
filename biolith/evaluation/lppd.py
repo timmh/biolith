@@ -1,4 +1,4 @@
-from typing import Dict
+from typing import Callable, Dict
 
 import jax
 import jax.numpy as jnp
@@ -9,7 +9,7 @@ from numpyro.infer import log_likelihood
 
 
 def lppd(
-    model_fn: callable,
+    model_fn: Callable,
     posterior_samples: Dict[str, jnp.ndarray],
     **kwargs,
 ) -> float:

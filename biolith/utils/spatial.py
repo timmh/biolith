@@ -1,6 +1,5 @@
 from typing import Optional, Tuple
 
-import jax
 import jax.numpy as jnp
 import numpy as np
 import numpyro
@@ -40,8 +39,8 @@ def sample_spatial_effects(
     with scope(prefix="gp", divider="_", hide_types=["plate"]):
         w = hsgp_squared_exponential(
             x=coords,
-            alpha=gp_sd,
-            length=gp_l,
+            alpha=gp_sd,  # type: ignore
+            length=gp_l,  # type: ignore
             m=20,  # basis functions per dimension
             ell=ell,
             non_centered=True,
@@ -56,7 +55,7 @@ def simulate_spatial_effects(
     gp_sd: float = 1.0,
     gp_l: float = 0.2,
     rng: Optional[np.random.Generator] = None,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, float]:
     """Simulate spatial effects using the same NNGP mechanism."""
     if rng is None:
         rng = np.random.default_rng()

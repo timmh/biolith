@@ -1,4 +1,5 @@
 import copy
+from typing import List, Optional
 
 import jax.numpy as jnp
 import pandas as pd
@@ -51,7 +52,9 @@ def dataframes_to_arrays(
     return site_covs, obs_covs, obs, session_duration, site_covs_names, obs_covs_names
 
 
-def rename_samples(samples, site_covs_names=None, obs_covs_names=None):
+def rename_samples(
+    samples, site_covs_names=None, obs_covs_names: Optional[List[str]] = None
+):
     samples = copy.copy(samples)
     if site_covs_names is not None:
         for i in range(len(site_covs_names)):
@@ -65,8 +68,8 @@ def rename_samples(samples, site_covs_names=None, obs_covs_names=None):
         for i in range(len(obs_covs_names)):
             if f"alpha_{i}" in samples:
                 samples[f"cov_det_{obs_covs_names[i]}"] = samples.pop(f"alpha_{i}")
-    if "alpha" in samples:
-        alpha = samples.pop("alpha")
-        for i in range(len(obs_covs_names)):
-            samples[f"cov_det_{obs_covs_names[i]}"] = alpha[..., i]
+        if "alpha" in samples:
+            alpha = samples.pop("alpha")
+            for i in range(len(obs_covs_names)):
+                samples[f"cov_det_{obs_covs_names[i]}"] = alpha[..., i]
     return samples

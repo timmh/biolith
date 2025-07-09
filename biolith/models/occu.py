@@ -157,7 +157,7 @@ def occu(
             jax.nn.sigmoid(reg_occ(site_covs) + w),
         )
         z = numpyro.sample(
-            "z", dist.Bernoulli(probs=psi), infer={"enumerate": "parallel"}
+            "z", dist.Bernoulli(probs=psi), infer={"enumerate": "parallel"}  # type: ignore
         )
 
         with numpyro.plate("time_periods", time_periods, dim=-2):
@@ -179,14 +179,14 @@ def occu(
                 with numpyro.handlers.mask(mask=jnp.isfinite(obs)):
                     numpyro.sample(
                         f"y",
-                        dist.Bernoulli(prob_detection_fp),
+                        dist.Bernoulli(prob_detection_fp),  # type: ignore
                         obs=jnp.nan_to_num(obs),
                         infer={"enumerate": "parallel"},
                     )
             else:
                 numpyro.sample(
                     f"y",
-                    dist.Bernoulli(prob_detection_fp),
+                    dist.Bernoulli(prob_detection_fp),  # type: ignore
                     infer={"enumerate": "parallel"},
                 )
 
@@ -248,7 +248,7 @@ def simulate(
 
         # Generate occupancy and site-level covariates
         site_covs = rng.normal(size=(n_sites, n_site_covs))
-        if spatial:
+        if spatial and coords is not None:
             w, ell = simulate_spatial_effects(coords, gp_sd=gp_sd, gp_l=gp_l, rng=rng)
         else:
             w, ell = np.zeros(n_sites), 0.0
@@ -644,8 +644,8 @@ class TestOccu(unittest.TestCase):
                 posterior_predictive_check(
                     posterior_samples,
                     data["obs"],
-                    group_by=group_by,
-                    statistic=statistic,
+                    group_by=group_by,  # type: ignore
+                    statistic=statistic,  # type: ignore
                 )
 
         # Test residuals

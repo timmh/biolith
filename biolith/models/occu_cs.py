@@ -120,17 +120,17 @@ def occu_cs(
     # Continuous score parameters
     prior_mus = prior_mu if isinstance(prior_mu, tuple) else (prior_mu, prior_mu)
     mu0 = numpyro.sample("mu0", prior_mus[0])
-    mu1 = numpyro.sample("mu1", dist.TruncatedDistribution(prior_mus[1], low=mu0))
+    mu1 = numpyro.sample("mu1", dist.TruncatedDistribution(prior_mus[1], low=mu0))  # type: ignore
     prior_sigmas = (
         prior_sigma if isinstance(prior_sigma, tuple) else (prior_sigma, prior_sigma)
     )
-    sigma0 = numpyro.sample("sigma0", prior_sigmas[0])
-    sigma1 = numpyro.sample("sigma1", prior_sigmas[1])
+    sigma0 = numpyro.sample("sigma0", prior_sigmas[0])  # type: ignore
+    sigma1 = numpyro.sample("sigma1", prior_sigmas[1])  # type: ignore
 
     # Transpose in order to fit NumPyro's plate structure
     site_covs = site_covs.transpose((1, 0))
     obs_covs = obs_covs.transpose((2, 1, 0))
-    obs = obs.transpose((1, 0))
+    obs = obs.transpose((1, 0)) if obs is not None else None
 
     with numpyro.plate("site", n_sites, dim=-1):
 
@@ -140,7 +140,7 @@ def occu_cs(
             jax.nn.sigmoid(reg_occ(site_covs) + w),
         )
         z = numpyro.sample(
-            "z", dist.Bernoulli(probs=psi), infer={"enumerate": "parallel"}
+            "z", dist.Bernoulli(probs=psi), infer={"enumerate": "parallel"}  # type: ignore
         )
 
         with numpyro.plate("time_periods", time_periods, dim=-2):
@@ -148,7 +148,7 @@ def occu_cs(
             # Detection process
             f = numpyro.sample(
                 "f",
-                dist.Bernoulli(z * jax.nn.sigmoid(reg_det(obs_covs))),
+                dist.Bernoulli(z * jax.nn.sigmoid(reg_det(obs_covs))),  # type: ignore
                 infer={"enumerate": "parallel"},
             )
 
@@ -157,14 +157,14 @@ def occu_cs(
                     numpyro.sample(
                         "s",
                         dist.Normal(
-                            (1 - f) * mu0 + f * mu1, (1 - f) * sigma0 + f * sigma1
-                        ),
+                            (1 - f) * mu0 + f * mu1, (1 - f) * sigma0 + f * sigma1  # type: ignore
+                        ),  # type: ignore
                         obs=jnp.nan_to_num(obs),
                     )
             else:
                 numpyro.sample(
                     "s",
-                    dist.Normal((1 - f) * mu0 + f * mu1, (1 - f) * sigma0 + f * sigma1),
+                    dist.Normal((1 - f) * mu0 + f * mu1, (1 - f) * sigma0 + f * sigma1),  # type: ignore
                 )
 
 
@@ -215,7 +215,7 @@ def simulate_cs(
 
         # Generate occupancy and site-level covariates
         site_covs = rng.normal(size=(n_sites, n_site_covs))
-        if spatial:
+        if spatial and coords is not None:
             w, ell = simulate_spatial_effects(coords, gp_sd=gp_sd, gp_l=gp_l, rng=rng)
         else:
             w, ell = np.zeros(n_sites), 0.0

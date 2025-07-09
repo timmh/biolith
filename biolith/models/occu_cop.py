@@ -117,6 +117,10 @@ def occu_cop(
             time_periods == session_duration.shape[1]
         ), "session_duration must have time_periods columns"
 
+    if session_duration is None:
+        # If session_duration is not provided, assume a constant duration of 1 for each time period
+        session_duration = jnp.ones((n_sites, time_periods))
+
     # Mask observations where covariates are missing
     obs_mask = jnp.isnan(obs_covs).any(axis=-1) | jnp.tile(
         jnp.isnan(site_covs).any(axis=-1)[:, None], (1, time_periods)
@@ -157,7 +161,7 @@ def occu_cop(
     site_covs = site_covs.transpose((1, 0))
     obs_covs = obs_covs.transpose((2, 1, 0))
     session_duration = session_duration.transpose((1, 0))
-    obs = obs.transpose((1, 0))
+    obs = obs.transpose((1, 0)) if obs is not None else None
 
     with numpyro.plate("site", n_sites, dim=-1):
 
@@ -167,7 +171,7 @@ def occu_cop(
             jax.nn.sigmoid(reg_occ(site_covs) + w),
         )
         z = numpyro.sample(
-            "z", dist.Bernoulli(probs=psi), infer={"enumerate": "parallel"}
+            "z", dist.Bernoulli(probs=psi), infer={"enumerate": "parallel"}  # type: ignore
         )
 
         with numpyro.plate("time_periods", time_periods, dim=-2):
@@ -250,7 +254,7 @@ def simulate_cop(
 
         # Generate occupancy and site-level covariates
         site_covs = rng.normal(size=(n_sites, n_site_covs))
-        if spatial:
+        if spatial and coords is not None:
             w, ell = simulate_spatial_effects(coords, gp_sd=gp_sd, gp_l=gp_l, rng=rng)
         else:
             w, ell = np.zeros(n_sites), 0.0
@@ -314,12 +318,12 @@ def simulate_cop(
     print(f"Mean rate: {np.mean(obs[np.isfinite(obs)]):.4f}")
 
     # session duration is assumed to be constant over all time periods
-    session_duration = np.full((n_sites, time_periods), session_duration)
+    session_duration_arr = np.full((n_sites, time_periods), session_duration)
 
     return dict(
         site_covs=site_covs,
         obs_covs=obs_covs,
-        session_duration=session_duration,
+        session_duration=session_duration_arr,
         obs=obs,
         false_positives_constant=True,
         coords=coords,

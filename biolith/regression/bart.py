@@ -70,7 +70,7 @@ class BARTRegression(AbstractRegression):
         with numpyro.plate(f"{self.name}_trees", self.n_trees, dim=-2):
             with numpyro.plate(f"{self.name}_nodes", self.num_nodes, dim=-1):
                 self.leaf_values = numpyro.sample(
-                    f"{self.name}_leaf_values", dist.Normal(0, sigma_mu)
+                    f"{self.name}_leaf_values", dist.Normal(0, sigma_mu)  # type: ignore
                 )
 
         depths = jnp.floor(jnp.log2(jnp.arange(1, self.num_internal_nodes + 1)))
@@ -82,12 +82,12 @@ class BARTRegression(AbstractRegression):
             ):
                 self.is_split_node = numpyro.sample(
                     f"{self.name}_is_split",
-                    dist.Bernoulli(split_probs),
+                    dist.Bernoulli(split_probs),  # type: ignore
                     infer={"enumerate": None},
                 )
                 self.split_vars = numpyro.sample(
                     f"{self.name}_split_vars",
-                    dist.Categorical(logits=jnp.zeros(self.n_covs)),
+                    dist.Categorical(logits=jnp.zeros(self.n_covs)),  # type: ignore
                     infer={"enumerate": None},
                 )
                 self.split_values = numpyro.sample(f"{self.name}_split_values", prior)
@@ -149,7 +149,7 @@ class BARTRegression(AbstractRegression):
 
         def gather_leaf_values(leaf_indices_for_sample):
             return jax.vmap(
-                lambda tree_idx, leaf_idx: self.leaf_values[tree_idx, leaf_idx]
+                lambda tree_idx, leaf_idx: self.leaf_values[tree_idx, leaf_idx]  # type: ignore
             )(jnp.arange(self.n_trees), leaf_indices_for_sample)
 
         predictions_per_tree = jax.vmap(gather_leaf_values)(leaf_indices)
@@ -193,7 +193,7 @@ class TestBARTRegression(unittest.TestCase):
             )
             mu = bart(x)
             with numpyro.plate("data", x.shape[1]):
-                numpyro.sample("obs", dist.Normal(mu, 0.1), obs=y)
+                numpyro.sample("obs", dist.Normal(mu, 0.1), obs=y)  # type: ignore
 
         kernel = DiscreteHMCGibbs(NUTS(model))
         mcmc = MCMC(kernel, num_warmup=500, num_samples=500)
@@ -269,7 +269,7 @@ class TestBARTRegression(unittest.TestCase):
             )
             mu = bart(x)
             with numpyro.plate("data", x.shape[1]):
-                numpyro.sample("obs", dist.Normal(mu, 0.1), obs=y)
+                numpyro.sample("obs", dist.Normal(mu, 0.1), obs=y)  # type: ignore
 
         kernel = DiscreteHMCGibbs(NUTS(model))
         mcmc = MCMC(kernel, num_warmup=500, num_samples=500)

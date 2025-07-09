@@ -4,7 +4,6 @@ from .occu_cs import TestOccuCS, occu_cs, simulate_cs
 from .occu_rn import TestOccuRN, occu_rn, simulate_rn
 
 __all__ = [
-    "fit",
     "occu",
     "simulate",
     "occu_cs",
