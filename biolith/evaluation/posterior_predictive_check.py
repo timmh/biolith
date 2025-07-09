@@ -104,18 +104,27 @@ def posterior_predictive_check(
     E = psi[:, :, jnp.newaxis] * p.transpose((0, 2, 1))
 
     if group_by == "site":
-        # Sum across the 'revisit' axis, imputing NaNs.
+        # Sum across the 'revisit' axis, summing only non-missing values.
         axis_to_agg = 2
-        obs_grouped = jnp.round(jnp.nanmean(obs, axis=1) * obs.shape[1])
+        obs_grouped = jnp.nansum(obs, axis=1)
     elif group_by == "revisit":
-        # Sum across the 'site' axis, imputing NaNs.
+        # Sum across the 'site' axis, summing only non-missing values.
         axis_to_agg = 1
-        obs_grouped = jnp.round(jnp.nanmean(obs, axis=0) * obs.shape[0])
+        obs_grouped = jnp.nansum(obs, axis=0)
     else:
         raise ValueError("`group_by` must be either 'site' or 'revisit'")
 
-    y_rep_grouped = y_rep.sum(axis=axis_to_agg)
-    E_grouped = E.sum(axis=axis_to_agg)
+    # Create a mask for non-missing observations
+    obs_mask = jnp.isfinite(obs)
+    
+    if group_by == "site":
+        # Sum across the 'revisit' axis, only including non-missing observations
+        y_rep_grouped = jnp.where(obs_mask[None, :, :], y_rep, 0).sum(axis=axis_to_agg)
+        E_grouped = jnp.where(obs_mask[None, :, :], E, 0).sum(axis=axis_to_agg)
+    elif group_by == "revisit":
+        # Sum across the 'site' axis, only including non-missing observations
+        y_rep_grouped = jnp.where(obs_mask[None, :, :], y_rep, 0).sum(axis=axis_to_agg)
+        E_grouped = jnp.where(obs_mask[None, :, :], E, 0).sum(axis=axis_to_agg)
 
     # Calculate the discrepancy for the observed data against the expected values
     # from each posterior sample. The result is averaged over the groups for each sample.
