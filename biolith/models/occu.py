@@ -27,6 +27,10 @@ def occu(
     prior_prob_fp_unoccupied: dist.Distribution = dist.Beta(2, 5),
     prior_gp_sd: dist.Distribution = dist.HalfNormal(1.0),
     prior_gp_length: dist.Distribution = dist.HalfNormal(1.0),
+    site_random_effects: bool = False,
+    obs_random_effects: bool = False,
+    prior_site_re_sd: dist.Distribution = dist.HalfNormal(1.0),
+    prior_obs_re_sd: dist.Distribution = dist.HalfNormal(1.0),
 ) -> None:
     """Bernoulli occupancy model inspired by MacKenzie et al. (2002) with optional false
     positives inspired by Royle and Link (2006).
@@ -68,6 +72,14 @@ def occu(
         Prior distribution for the spatial random effect scale.
     prior_gp_length : numpyro.distributions.Distribution
         Prior distribution for the spatial kernel length scale.
+    site_random_effects : bool
+        Flag indicating whether to include site-level random effects.
+    obs_random_effects : bool
+        Flag indicating whether to include observation-level random effects.
+    prior_site_re_sd : numpyro.distributions.Distribution
+        Prior distribution for the site-level random effect standard deviation.
+    prior_obs_re_sd : numpyro.distributions.Distribution
+        Prior distribution for the observation-level random effect standard deviation.
 
     Examples
     --------
@@ -144,6 +156,12 @@ def occu(
     else:
         w = jnp.zeros(n_sites)
 
+    # Random effects standard deviations (sampled before plates)
+    if site_random_effects:
+        site_re_sd = numpyro.sample("site_re_sd", prior_site_re_sd)
+    if obs_random_effects:
+        obs_re_sd = numpyro.sample("obs_re_sd", prior_obs_re_sd)
+
     # Transpose in order to fit NumPyro's plate structure
     site_covs = site_covs.transpose((1, 0))
     obs_covs = obs_covs.transpose((2, 1, 0))
@@ -151,10 +169,18 @@ def occu(
 
     with numpyro.plate("site", n_sites, dim=-1):
 
+        # Site-level random effects
+        if site_random_effects:
+            site_re_occ = numpyro.sample("site_re_occ", dist.Normal(0, site_re_sd))  # type: ignore
+            site_re_det = numpyro.sample("site_re_det", dist.Normal(0, site_re_sd))  # type: ignore
+        else:
+            site_re_occ = 0.0
+            site_re_det = 0.0
+
         # Occupancy process
         psi = numpyro.deterministic(
             "psi",
-            jax.nn.sigmoid(reg_occ(site_covs) + w),
+            jax.nn.sigmoid(reg_occ(site_covs) + w + site_re_occ),
         )
         z = numpyro.sample(
             "z", dist.Bernoulli(probs=psi), infer={"enumerate": "parallel"}  # type: ignore
@@ -162,10 +188,16 @@ def occu(
 
         with numpyro.plate("time_periods", time_periods, dim=-2):
 
+            # Observation-level random effects
+            if obs_random_effects:
+                obs_re = numpyro.sample("obs_re", dist.Normal(0, obs_re_sd))  # type: ignore
+            else:
+                obs_re = 0.0
+
             # Detection process
             prob_detection = numpyro.deterministic(
                 f"prob_detection",
-                jax.nn.sigmoid(reg_det(obs_covs)),
+                jax.nn.sigmoid(reg_det(obs_covs) + site_re_det + obs_re),
             )
             prob_detection_fp = numpyro.deterministic(
                 "prob_detection_fp",
@@ -208,6 +240,10 @@ def simulate(
     spatial: bool = False,
     gp_sd: float = 1.0,
     gp_l: float = 0.2,
+    site_random_effects: bool = False,
+    obs_random_effects: bool = False,
+    site_re_sd: float = 0.5,
+    obs_re_sd: float = 0.3,
 ) -> tuple[dict, dict]:
     """Generate a synthetic dataset for the :func:`occu` model.
 
@@ -252,6 +288,14 @@ def simulate(
             w, ell = simulate_spatial_effects(coords, gp_sd=gp_sd, gp_l=gp_l, rng=rng)
         else:
             w, ell = np.zeros(n_sites), 0.0
+
+        # Generate random effects
+        if site_random_effects:
+            site_re_occ = rng.normal(0, site_re_sd, size=n_sites)
+            site_re_det = rng.normal(0, site_re_sd, size=n_sites)
+        else:
+            site_re_occ = np.zeros(n_sites)
+            site_re_det = np.zeros(n_sites)
         psi = 1 / (
             1
             + np.exp(
@@ -262,6 +306,7 @@ def simulate(
                         axis=0,
                     )
                     + w
+                    + site_re_occ
                 )
             )
         )
@@ -274,6 +319,13 @@ def simulate(
 
         # Create matrix of detection covariates
         obs_covs = rng.normal(size=(n_sites, time_periods, n_obs_covs))
+
+        # Generate observation-level random effects
+        if obs_random_effects:
+            obs_re = rng.normal(0, obs_re_sd, size=(n_sites, time_periods))
+        else:
+            obs_re = np.zeros((n_sites, time_periods))
+
         prob_detection = 1 / (
             1
             + np.exp(
@@ -283,6 +335,8 @@ def simulate(
                         [alpha[i + 1] * obs_covs[..., i] for i in range(n_obs_covs)],
                         axis=0,
                     )
+                    + site_re_det[:, None]
+                    + obs_re
                 )
             )
         )
@@ -318,19 +372,43 @@ def simulate(
         f"Proportion of timesteps with observation: {np.mean(obs[np.isfinite(obs)]):.4f}"
     )
 
-    return dict(
-        site_covs=site_covs,
-        obs_covs=obs_covs,
-        obs=obs,
-        coords=coords,
-        ell=ell,
-    ), dict(
+    # Build true_params dict
+    true_params = dict(
         z=z,
         beta=beta,
         alpha=alpha,
         w=w,
         gp_sd=gp_sd,
         gp_l=gp_l,
+    )
+
+    # Add random effects to true_params if they were simulated
+    if site_random_effects:
+        true_params.update(
+            {
+                "site_re_occ": site_re_occ,
+                "site_re_det": site_re_det,
+                "site_re_sd": site_re_sd,
+            }
+        )
+
+    if obs_random_effects:
+        true_params.update(
+            {
+                "obs_re": obs_re,
+                "obs_re_sd": obs_re_sd,
+            }
+        )
+
+    return (
+        dict(
+            site_covs=site_covs,
+            obs_covs=obs_covs,
+            obs=obs,
+            coords=coords,
+            ell=ell,
+        ),
+        true_params,
     )
 
 
@@ -677,6 +755,105 @@ class TestOccu(unittest.TestCase):
                     results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1
                 )
             )
+
+    def test_site_random_effects(self):
+
+        data, true_params = simulate(
+            site_random_effects=True,
+            obs_random_effects=False,
+            deployment_days_per_site=7000,  # to ensure enough data for random effects
+        )
+
+        from biolith.evaluation import lppd
+        from biolith.utils import fit, predict
+
+        results = fit(
+            occu,
+            **data,
+            num_chains=1,
+            num_samples=500,
+            timeout=600,
+        )
+        posterior_samples = predict(occu, results.mcmc, **data)
+        l = lppd(occu, posterior_samples, **data)
+
+        results_re = fit(
+            occu,
+            **data,
+            site_random_effects=True,
+            obs_random_effects=False,
+            num_chains=1,
+            num_samples=500,
+            timeout=600,
+        )
+        posterior_samples_re = predict(
+            occu,
+            results_re.mcmc,
+            **data,
+            site_random_effects=True,
+            obs_random_effects=False,
+        )
+        l_re = lppd(occu, posterior_samples_re, **data)
+
+        self.assertTrue(l_re >= 0.95 * l)
+        self.assertTrue("site_re_sd" in results_re.samples)
+        self.assertTrue("site_re_occ" in results_re.samples)
+        self.assertTrue("site_re_det" in results_re.samples)
+        self.assertTrue(results_re.samples["site_re_sd"].mean() > 0)
+        self.assertTrue(
+            np.allclose(
+                results_re.samples["psi"].mean(), true_params["z"].mean(), atol=0.15
+            )
+        )
+
+    def test_obs_random_effects(self):
+        data, true_params = simulate(simulate_missing=True)
+
+        from biolith.utils import fit
+
+        results = fit(
+            occu,
+            **data,
+            obs_random_effects=True,
+            num_chains=1,
+            num_samples=500,
+            timeout=600,
+        )
+
+        self.assertTrue("obs_re_sd" in results.samples)
+        self.assertTrue("obs_re" in results.samples)
+        self.assertTrue(results.samples["obs_re_sd"].mean() > 0)
+        self.assertTrue(
+            np.allclose(
+                results.samples["psi"].mean(), true_params["z"].mean(), atol=0.15
+            )
+        )
+
+    def test_combined_random_effects(self):
+        data, true_params = simulate(simulate_missing=True)
+
+        from biolith.utils import fit
+
+        results = fit(
+            occu,
+            **data,
+            site_random_effects=True,
+            obs_random_effects=True,
+            num_chains=1,
+            num_samples=500,
+            timeout=600,
+        )
+
+        self.assertTrue("site_re_sd" in results.samples)
+        self.assertTrue("site_re_occ" in results.samples)
+        self.assertTrue("site_re_det" in results.samples)
+        self.assertTrue("obs_re_sd" in results.samples)
+        self.assertTrue("obs_re" in results.samples)
+        self.assertTrue(
+            np.allclose(
+                results.samples["psi"].mean(), true_params["z"].mean(), atol=0.15
+            )
+        )
 
 
 if __name__ == "__main__":

@@ -27,6 +27,10 @@ def occu_rn(
     prior_prob_fp_constant: dist.Distribution = dist.Beta(2, 5),
     prior_gp_sd: dist.Distribution = dist.HalfNormal(1.0),
     prior_gp_length: dist.Distribution = dist.HalfNormal(1.0),
+    site_random_effects: bool = False,
+    obs_random_effects: bool = False,
+    prior_site_re_sd: dist.Distribution = dist.HalfNormal(1.0),
+    prior_obs_re_sd: dist.Distribution = dist.HalfNormal(1.0),
 ) -> None:
     """Occupancy model inspired by Royle and Nichols (2003), relating observations to
     the number of individuals present at a site.
@@ -67,6 +71,14 @@ def occu_rn(
         Prior distribution for the spatial random effect scale.
     prior_gp_length : numpyro.distributions.Distribution
         Prior distribution for the spatial kernel length scale.
+    site_random_effects : bool
+        Flag indicating whether to include site-level random effects.
+    obs_random_effects : bool
+        Flag indicating whether to include observation-level random effects.
+    prior_site_re_sd : dist.Distribution
+        Prior distribution for the site-level random effect standard deviation.
+    prior_obs_re_sd : dist.Distribution
+        Prior distribution for the observation-level random effect standard deviation.
 
     Examples
     --------
@@ -121,6 +133,12 @@ def occu_rn(
     else:
         w = jnp.zeros(n_sites)
 
+    # Random effects standard deviations (sampled before plates)
+    if site_random_effects:
+        site_re_sd = numpyro.sample("site_re_sd", prior_site_re_sd)
+    if obs_random_effects:
+        obs_re_sd = numpyro.sample("obs_re_sd", prior_obs_re_sd)
+
     # Transpose in order to fit NumPyro's plate structure
     site_covs = site_covs.transpose((1, 0))
     obs_covs = obs_covs.transpose((2, 1, 0))
@@ -128,10 +146,18 @@ def occu_rn(
 
     with numpyro.plate("site", n_sites, dim=-1):
 
-        # Occupancy process
+        # Site-level random effects
+        if site_random_effects:
+            site_re_abu = numpyro.sample("site_re_abu", dist.Normal(0, site_re_sd))  # type: ignore
+            site_re_det = numpyro.sample("site_re_det", dist.Normal(0, site_re_sd))  # type: ignore
+        else:
+            site_re_abu = 0.0
+            site_re_det = 0.0
+
+        # Abundance process (note: this model uses abundance instead of occupancy)
         abundance = numpyro.deterministic(
             "abundance",
-            jnp.exp(reg_abu(site_covs) + w),
+            jnp.exp(reg_abu(site_covs) + w + site_re_abu),
         )
 
         N_i = numpyro.sample(
@@ -142,10 +168,16 @@ def occu_rn(
 
         with numpyro.plate("time", time_periods, dim=-2):
 
+            # Observation-level random effects
+            if obs_random_effects:
+                obs_re = numpyro.sample("obs_re", dist.Normal(0, obs_re_sd))  # type: ignore
+            else:
+                obs_re = 0.0
+
             # Detection process
             r_it = numpyro.deterministic(
                 f"prob_detection",
-                jax.nn.sigmoid(reg_det(obs_covs)),
+                jax.nn.sigmoid(reg_det(obs_covs) + site_re_det + obs_re),
             )
             p_it = 1.0 - (1.0 - r_it) ** N_i[None, :]  # type: ignore
 
@@ -361,6 +393,80 @@ class TestOccuRN(unittest.TestCase):
         self.assertTrue(
             np.allclose(results.samples["gp_l"].mean(), true_params["gp_l"], atol=0.5)
         )
+
+    def test_site_random_effects(self):
+        data, true_params = simulate_rn(simulate_missing=True)
+
+        from biolith.utils import fit
+
+        results = fit(
+            occu_rn,
+            **data,
+            site_random_effects=True,
+            num_chains=1,
+            num_samples=500,
+            timeout=600,
+        )
+
+        self.assertTrue("site_re_sd" in results.samples)
+        self.assertTrue("site_re_abu" in results.samples)
+        self.assertTrue("site_re_det" in results.samples)
+        self.assertTrue(results.samples["site_re_sd"].mean() > 0)
+        self.assertTrue(
+            np.allclose(
+                results.samples["abundance"].mean(),
+                true_params["abundance"].mean(),
+                rtol=0.2,
+            )
+        )
+
+    def test_obs_random_effects(self):
+        data, true_params = simulate_rn(simulate_missing=True)
+
+        from biolith.utils import fit
+
+        results = fit(
+            occu_rn,
+            **data,
+            obs_random_effects=True,
+            num_chains=1,
+            num_samples=500,
+            timeout=600,
+        )
+
+        self.assertTrue("obs_re_sd" in results.samples)
+        self.assertTrue("obs_re" in results.samples)
+        self.assertTrue(results.samples["obs_re_sd"].mean() > 0)
+        self.assertTrue(
+            np.allclose(
+                results.samples["abundance"].mean(),
+                true_params["abundance"].mean(),
+                rtol=0.2,
+            )
+        )
+
+    def test_combined_random_effects(self):
+        data, _ = simulate_rn(simulate_missing=True)
+
+        from biolith.utils import fit
+
+        # this is relatively slow, so we use fewer samples and don't test recovering the true params
+        results = fit(
+            occu_rn,
+            **data,
+            site_random_effects=True,
+            obs_random_effects=True,
+            num_chains=1,
+            num_warmup=10,
+            num_samples=10,
+            timeout=600,
+        )
+
+        self.assertTrue("site_re_sd" in results.samples)
+        self.assertTrue("site_re_abu" in results.samples)
+        self.assertTrue("site_re_det" in results.samples)
+        self.assertTrue("obs_re_sd" in results.samples)
+        self.assertTrue("obs_re" in results.samples)
 
 
 if __name__ == "__main__":
