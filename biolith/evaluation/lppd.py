@@ -1,11 +1,11 @@
+import unittest
 from typing import Callable, Dict
 
-import jax
 import jax.numpy as jnp
 import numpy as np
-import numpyro
 from jax.scipy.special import logsumexp
-from numpyro.infer import log_likelihood
+
+from biolith.evaluation.log_likelihood import log_likelihood
 
 
 def lppd(
@@ -49,12 +49,28 @@ def lppd(
     >>> lppd(occu, preds, **data)
     """
 
-    with numpyro.handlers.block(), numpyro.handlers.seed(
-        rng_seed=jax.random.PRNGKey(0)
-    ):
-        log_lik_test = log_likelihood(model_fn, posterior_samples, **kwargs)
-        lppd_test = jnp.sum(
-            logsumexp(log_lik_test["y"], axis=0) - np.log(log_lik_test["y"].shape[0])
-        ).item()
+    log_lik = log_likelihood(model_fn, posterior_samples, **kwargs)
+    lppd = jnp.sum(
+        logsumexp(log_lik["y"], axis=0) - np.log(log_lik["y"].shape[0])
+    ).item()
 
-    return lppd_test
+    return lppd
+
+
+class TestLPPD(unittest.TestCase):
+
+    def test_lppd(self):
+        from biolith.models import occu, simulate
+        from biolith.utils import fit, predict
+
+        data, _ = simulate()
+        results = fit(occu, **data)
+        posterior_samples = predict(occu, results.mcmc, **data)
+
+        l = lppd(occu, posterior_samples, **data)
+
+        self.assertTrue(-jnp.inf < l < 0, "LPPD should be negative and finite.")
+
+
+if __name__ == "__main__":
+    unittest.main()
