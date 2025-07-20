@@ -160,10 +160,8 @@ class BARTRegression(AbstractRegression):
         return final_prediction
 
     def compute_feature_importances(self) -> None:
-        """
-        Compute a simple feature importance score based on frequency
-        of splits across all trees and internal nodes.
-        """
+        """Compute a simple feature importance score based on frequency of splits across
+        all trees and internal nodes."""
         used_features = jnp.where(self.is_split_node == 1, self.split_vars, -1)
         one_hot_feats = jax.nn.one_hot(used_features, self.n_covs)
         counts = jnp.sum(one_hot_feats, axis=(0, 1))

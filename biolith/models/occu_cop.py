@@ -29,8 +29,8 @@ def occu_cop(
     prior_gp_sd: dist.Distribution = dist.HalfNormal(1.0),
     prior_gp_length: dist.Distribution = dist.HalfNormal(1.0),
 ) -> None:
-    """
-    Count occupancy model using a Poisson detection process, inspired by Pautrel et al. (2024).
+    """Count occupancy model using a Poisson detection process, inspired by Pautrel et
+    al. (2024).
 
     References
     ----------

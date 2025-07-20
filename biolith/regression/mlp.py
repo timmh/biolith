@@ -9,11 +9,10 @@ from biolith.regression.abstract import AbstractRegression
 
 
 class MLPRegression(AbstractRegression):
-    """
-    Multilayer perceptron model for occupancy or detection in an occupancy model.
+    """Multilayer perceptron model for occupancy or detection in an occupancy model.
 
-    This model computes a potentially non-linear predictor based on covariates,
-    which can be used for either occupancy or detection processes.
+    This model computes a potentially non-linear predictor based on covariates, which
+    can be used for either occupancy or detection processes.
     """
 
     def __init__(

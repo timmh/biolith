@@ -9,11 +9,10 @@ from biolith.regression.abstract import AbstractRegression
 
 
 class LinearRegression(AbstractRegression):
-    """
-    Linear regression model for occupancy or detection in an occupancy model.
+    """Linear regression model for occupancy or detection in an occupancy model.
 
-    This model computes a linear predictor based on covariates, which can be used
-    for either occupancy or detection processes.
+    This model computes a linear predictor based on covariates, which can be used for
+    either occupancy or detection processes.
     """
 
     def __init__(self, name: str, n_covs: int, prior: Distribution = Normal(0, 1)):

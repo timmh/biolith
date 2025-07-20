@@ -28,7 +28,8 @@ def occu_rn(
     prior_gp_sd: dist.Distribution = dist.HalfNormal(1.0),
     prior_gp_length: dist.Distribution = dist.HalfNormal(1.0),
 ) -> None:
-    """Occupancy model inspired by Royle and Nichols (2003), relating observations to the number of individuals present at a site.
+    """Occupancy model inspired by Royle and Nichols (2003), relating observations to
+    the number of individuals present at a site.
 
     References
     ----------

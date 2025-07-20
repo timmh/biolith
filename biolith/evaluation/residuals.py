@@ -7,7 +7,24 @@ def residuals(
     posterior_samples: Dict[str, jnp.ndarray],
     obs: jnp.ndarray,
 ) -> Tuple[jnp.ndarray, jnp.ndarray]:
-    """Calculates occupancy and detection residuals from posterior samples.
+    r"""Calculates occupancy and detection residuals from posterior samples.
+
+    The residuals are calculated as:
+
+    Occupancy residuals:
+
+    .. math::
+        o_i^{(q)} = z_i^{(q)} - \psi_i^{(q)}
+
+    Detection residuals:
+
+    .. math::
+        d_{ij}^{(q)} = y_{ij} - p_{ij}^{(q)} \quad \text{conditional on} \quad z_i^{(q)} = 1
+
+    where :math:`z_i^{(q)}` is the latent occupancy state for site :math:`i` in posterior
+    sample :math:`q`, :math:`\psi_i^{(q)}` is the occupancy probability, :math:`y_{ij}`
+    is the observed detection at site :math:`i` and visit :math:`j`, and :math:`p_{ij}^{(q)}`
+    is the detection probability.
 
     This function implements the residual definitions from Wright et al. (2019)
     to help diagnose occupancy model fit. It separates residuals for the

@@ -19,7 +19,28 @@ def posterior_predictive_check(
     group_by: Literal["site", "revisit"] = "site",
     statistic: Literal["freeman-tukey", "chi-squared"] = "freeman-tukey",
 ) -> float:
-    """Performs posterior predictive checks of a Bayesian occupancy model.
+    r"""Performs posterior predictive checks of a Bayesian occupancy model.
+
+    The Bayesian p-value is calculated as:
+
+    .. math::
+        p_B = P(T(y^{\text{rep}}, \theta) > T(y, \theta) | y)
+
+    where :math:`T(\cdot, \cdot)` is the test statistic, :math:`y` is the observed data,
+    :math:`y^{\text{rep}}` is replicated data from the posterior predictive distribution,
+    and :math:`\theta` represents the model parameters.
+
+    For Freeman-Tukey statistic:
+
+    .. math::
+        T_{\text{FT}} = \sum (\sqrt{y} - \sqrt{E})^2
+
+    For Chi-squared statistic:
+
+    .. math::
+        T_{\chi^2} = \sum \frac{(y - E)^2}{E}
+
+    where :math:`E` is the expected value and the sum is over the grouping dimension.
 
     This function calculates a Bayesian p-value to assess the goodness-of-fit
     of the model. It compares the observed data with replicated data generated

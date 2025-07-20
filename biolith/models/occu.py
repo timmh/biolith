@@ -28,8 +28,8 @@ def occu(
     prior_gp_sd: dist.Distribution = dist.HalfNormal(1.0),
     prior_gp_length: dist.Distribution = dist.HalfNormal(1.0),
 ) -> None:
-    """
-    Bernoulli occupancy model inspired by MacKenzie et al. (2002) with optional false positives inspired by Royle and Link (2006).
+    """Bernoulli occupancy model inspired by MacKenzie et al. (2002) with optional false
+    positives inspired by Royle and Link (2006).
 
     References
     ----------

@@ -8,7 +8,19 @@ def deviance(
     posterior_samples: Dict[str, jnp.ndarray],
     obs: jnp.ndarray,
 ) -> float:
-    """Calculates deviance as a scoring rule following spOccupancy and Hooten and Hobbs (2015).
+    r"""Calculates deviance as a scoring rule following spOccupancy and Hooten and Hobbs
+    (2015).
+
+    The deviance is calculated as:
+
+    .. math::
+        D = -2 \log\left(\frac{1}{Q} \sum_{q=1}^{Q} \prod_{i=1}^{n} \prod_{j=1}^{J_i} p(y_{ij} | z_i^{(q)}, p_{ij}^{(q)})\right)
+
+    where :math:`Q` is the number of posterior samples, :math:`n` is the number of sites,
+    :math:`J_i` is the number of visits at site :math:`i`, :math:`y_{ij}` is the observed
+    detection at site :math:`i` and visit :math:`j`, :math:`z_i^{(q)}` is the latent occupancy
+    state for site :math:`i` in sample :math:`q`, and :math:`p_{ij}^{(q)}` is the detection
+    probability for site :math:`i` and visit :math:`j` in sample :math:`q`.
 
     References
     ----------

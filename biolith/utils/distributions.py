@@ -4,13 +4,12 @@ import numpyro.distributions as dist
 
 
 def RightTruncatedPoisson(rate, max_cutoff=100, factor=3):
-    """
-    Sample from a right-truncated Poisson distribution (up to a cutoff)
-    using NumPyro's Categorical, with support for batching over 'rate'.
+    """Sample from a right-truncated Poisson distribution (up to a cutoff) using
+    NumPyro's Categorical, with support for batching over 'rate'.
 
     :param jnp.ndarray or float rate: Poisson rate parameter(s).
-    :returns: A NumPyro sample (or batch of samples) from the
-              right-truncated Poisson distribution.
+    :returns: A NumPyro sample (or batch of samples) from the right-truncated Poisson
+        distribution.
     """
     # Convert rate to jax array
     rate = jnp.asarray(rate)

@@ -26,8 +26,8 @@ def occu_cs(
     prior_gp_sd: dist.Distribution = dist.HalfNormal(1.0),
     prior_gp_length: dist.Distribution = dist.HalfNormal(1.0),
 ) -> None:
-    """
-    Continuous-score occupancy model inspired by Rhinehart et al. (2022), modeling classification scores as being drawn from true or false positive distributions.
+    """Continuous-score occupancy model inspired by Rhinehart et al. (2022), modeling
+    classification scores as being drawn from true or false positive distributions.
 
     References
     ----------

@@ -13,7 +13,16 @@ def lppd(
     posterior_samples: Dict[str, jnp.ndarray],
     **kwargs,
 ) -> float:
-    """Calculates the log pointwise predictive density (lppd) for a fitted model.
+    r"""Calculates the log pointwise predictive density (lppd) for a fitted model.
+
+    The lppd is calculated as:
+
+    .. math::
+        \text{lppd} = \sum_{i=1}^{n} \log\left(\frac{1}{Q} \sum_{q=1}^{Q} p(y_i | \theta^{(q)})\right)
+
+    where :math:`n` is the number of sites, :math:`Q` is the number of posterior samples,
+    :math:`y_i` is the observed detection history for site :math:`i` across :math:`J_i` revisits,
+    and :math:`\theta^{(q)}` represents the model parameters in posterior sample :math:`q`.
 
     This function computes the lppd using the log likelihood of the model
     given the posterior samples and the observed data. It uses the

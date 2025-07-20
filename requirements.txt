@@ -6,6 +6,7 @@ funsor==0.4.5  # currently required in order to do inference for models with dis
 # Development tools
 black
 isort
+docformatter
 pylint
 pyright
 sphinx

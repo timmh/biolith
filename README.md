@@ -48,7 +48,7 @@ API Documentation and examples are available [here](https://timm.haucke.xyz/biol
 Run `python -m unittest` to run unit tests.
 
 Run `scripts/format.sh` to format the codebase. Execute `scripts/check.sh` to run
-isort and black in check mode along with pylint and pyright.
+isort, docformatter and black in check mode along with pylint and pyright.
 
 To install the pre-commit hook for formatting and code linting, run:
 
@@ -65,4 +65,4 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 For questions or feedback, please open an issue or email [haucke@mit.edu](mailto:haucke@mit.edu).
 
 ## Acknowledgements
-This work was supported by the [MIT-IBM Watson AI Lab](https://mitibmwatsonailab.mit.edu/) and [Goldman Sachs](https://www.goldmansachs.com/). This work was supported by the AI and Biodiversity Change (ABC) Global Center, which is funded by the [US National Science Foundation under Award No. 2330423](https://www.nsf.gov/awardsearch/showAward?AWD_ID=2330423&HistoricalAwards=false) and [Natural Sciences and Engineering Research Council of Canada under Award No. 585136](https://www.nserc-crsng.gc.ca/ase-oro/Details-Detailles_eng.asp?id=782440). This work draws on research supported in part by the Social Sciences and Humanities Research Council.
+This work was supported by the AI and Biodiversity Change (ABC) Global Center, which is funded by the [US National Science Foundation under Award No. 2330423](https://www.nsf.gov/awardsearch/showAward?AWD_ID=2330423&HistoricalAwards=false) and [Natural Sciences and Engineering Research Council of Canada under Award No. 585136](https://www.nserc-crsng.gc.ca/ase-oro/Details-Detailles_eng.asp?id=782440). This work draws on research supported in part by the Social Sciences and Humanities Research Council.
