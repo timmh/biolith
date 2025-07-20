@@ -236,7 +236,10 @@ class TestBARTRegression(unittest.TestCase):
             plt.xlabel("x")
             plt.ylabel("y")
             plt.legend()
-            plt.savefig("bart_regression_test_plot.png")
+            import os
+
+            os.makedirs("figures", exist_ok=True)
+            plt.savefig("figures/bart_regression_test_plot.png")
             plt.close()
         except ImportError:
             print("Matplotlib is not installed, skipping plot generation.")

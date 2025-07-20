@@ -112,7 +112,10 @@ class TestLinearRegression(unittest.TestCase):
             plt.ylabel("Response")
             plt.title("Linear Regression Fit")
             plt.legend()
-            plt.savefig("linear_regression_test_plot.png")
+            import os
+
+            os.makedirs("figures", exist_ok=True)
+            plt.savefig("figures/linear_regression_test_plot.png")
             plt.close()
         except ImportError:
             print("Matplotlib is not installed, skipping plot generation.")

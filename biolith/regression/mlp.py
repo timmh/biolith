@@ -125,9 +125,10 @@ class TestMLPRegression(unittest.TestCase):
             plt.ylabel("y")
             plt.title("MLP Regression Fit")
             plt.legend()
-            # To prevent the plot from showing during automated tests,
-            # you might want to save it instead of showing it.
-            plt.savefig("mlp_regression_test_plot.png")
+            import os
+
+            os.makedirs("figures", exist_ok=True)
+            plt.savefig("figures/mlp_regression_test_plot.png")
             plt.close()
         except ImportError:
             print("Matplotlib is not installed, skipping plot generation.")
