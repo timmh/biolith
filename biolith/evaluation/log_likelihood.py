@@ -34,7 +34,7 @@ def log_likelihood(
     >>> data, _ = simulate()
     >>> results = fit(occu, **data)
     >>> preds = predict(occu, results.mcmc, **data)
-    >>> lppd(occu, preds, **data)
+    >>> log_likelihood(occu, preds, **data)
     """
 
     # Ensure posterior_samples does not contain observed samples,
@@ -52,6 +52,45 @@ def log_likelihood(
     return log_lik
 
 
+def log_likelihood_manual(
+    posterior_samples: Dict[str, jnp.ndarray], data: Dict[str, jnp.ndarray]
+) -> jnp.ndarray:
+    """Calculates the log likelihood manually for a non-false positive, Bernoulli
+    occupancy model, based on posterior samples and observed data.
+
+    Parameters
+    ----------
+    posterior_samples: A dictionary containing posterior samples from a fitted model.
+    data: A dictionary containing observed data.
+
+    Returns
+    -------
+    jnp.ndarray: The manually computed log likelihood for each observation.
+
+    Examples
+    --------
+    >>> from biolith.models import occu, simulate
+    >>> from biolith.utils import fit, predict
+    >>> data, _ = simulate()
+    >>> results = fit(occu, **data)
+    >>> posterior_samples = predict(occu, results.mcmc, **data)
+    >>> log_likelihood_manual(posterior_samples, data
+    """
+
+    log_lik_manual = jnp.log(
+        posterior_samples["prob_detection"].transpose((0, 2, 1))
+        * posterior_samples["psi"][:, :, None]
+    ) * data["obs"][None, :, :] + jnp.log(
+        1
+        - posterior_samples["prob_detection"].transpose((0, 2, 1))
+        * posterior_samples["psi"][:, :, None]
+    ) * (
+        1 - data["obs"][None, :, :]
+    )
+
+    return log_lik_manual
+
+
 class TestLogLikelihood(unittest.TestCase):
 
     def test_log_likelihood(self):
@@ -66,16 +105,7 @@ class TestLogLikelihood(unittest.TestCase):
             (0, 2, 1)
         )
 
-        log_lik_manual = jnp.log(
-            posterior_samples["prob_detection"].transpose((0, 2, 1))
-            * posterior_samples["psi"][:, :, None]
-        ) * data["obs"][None, :, :] + jnp.log(
-            1
-            - posterior_samples["prob_detection"].transpose((0, 2, 1))
-            * posterior_samples["psi"][:, :, None]
-        ) * (
-            1 - data["obs"][None, :, :]
-        )
+        log_lik_manual = log_likelihood_manual(posterior_samples, data)
 
         log_lik_per_obs = logsumexp(
             log_lik[:, jnp.isfinite(data["obs"])], axis=0

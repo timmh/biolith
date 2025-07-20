@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 from jax.scipy.special import logsumexp
 
-from biolith.evaluation.log_likelihood import log_likelihood
+from biolith.evaluation.log_likelihood import log_likelihood, log_likelihood_manual
 
 
 def lppd(
@@ -57,6 +57,48 @@ def lppd(
     return lppd
 
 
+def lppd_manual(
+    posterior_samples: Dict[str, jnp.ndarray],
+    data: Dict[str, jnp.ndarray],
+) -> float:
+    """Calculates the log pointwise predictive density (lppd) manually for a non-false
+    positive, Bernoulli occupancy model.
+
+    Parameters
+    ----------
+    posterior_samples: A dictionary containing posterior samples from a fitted model.
+    data: A dictionary containing observed data.
+
+    Returns
+    -------
+    float: The log pointwise predictive density (lppd) value.
+
+    Examples
+    --------
+    >>> from biolith.models import occu, simulate
+    >>> from biolith.utils import fit, predict
+    >>> from biolith.evaluation import lppd_manual
+    >>> data, _ = simulate()
+    >>> results = fit(occu, **data)
+    >>> posterior_samples = predict(occu, results.mcmc, **data)
+    >>> lppd_manual(posterior_samples, data)
+    """
+
+    log_lik_manual = log_likelihood_manual(posterior_samples, data)
+
+    lppd_manual = (
+        logsumexp(
+            log_lik_manual.reshape(log_lik_manual.shape[0], -1)[
+                :, jnp.isfinite(data["obs"]).reshape(-1)
+            ],
+            axis=0,
+        )
+        - jnp.log(log_lik_manual.shape[0])
+    ).sum()
+
+    return lppd_manual.item()
+
+
 class TestLPPD(unittest.TestCase):
 
     def test_lppd(self):
@@ -68,8 +110,13 @@ class TestLPPD(unittest.TestCase):
         posterior_samples = predict(occu, results.mcmc, **data)
 
         l = lppd(occu, posterior_samples, **data)
+        l_manual = lppd_manual(posterior_samples, data)
 
         self.assertTrue(-jnp.inf < l < 0, "LPPD should be negative and finite.")
+        self.assertTrue(
+            jnp.allclose(l, l_manual, rtol=1e-3),
+            "NumPyro LPPD should match manually computed LPPD.",
+        )
 
 
 if __name__ == "__main__":
