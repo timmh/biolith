@@ -53,7 +53,7 @@ def log_likelihood(
 
 
 def log_likelihood_manual(
-    posterior_samples: Dict[str, jnp.ndarray], data: Dict[str, jnp.ndarray]
+    posterior_samples: Dict[str, jnp.ndarray], data: Dict[str, jnp.ndarray], eps=1e-10
 ) -> jnp.ndarray:
     """Calculates the log likelihood manually for a non-false positive, Bernoulli
     occupancy model, based on posterior samples and observed data.
@@ -78,12 +78,20 @@ def log_likelihood_manual(
     """
 
     log_lik_manual = jnp.log(
-        posterior_samples["prob_detection"].transpose((0, 2, 1))
-        * posterior_samples["psi"][:, :, None]
+        jnp.clip(
+            posterior_samples["prob_detection"].transpose((0, 2, 1))
+            * posterior_samples["psi"][:, :, None],
+            min=eps,
+            max=1 - eps,
+        )
     ) * data["obs"][None, :, :] + jnp.log(
-        1
-        - posterior_samples["prob_detection"].transpose((0, 2, 1))
-        * posterior_samples["psi"][:, :, None]
+        jnp.clip(
+            1
+            - posterior_samples["prob_detection"].transpose((0, 2, 1))
+            * posterior_samples["psi"][:, :, None],
+            min=eps,
+            max=1 - eps,
+        )
     ) * (
         1 - data["obs"][None, :, :]
     )
@@ -97,7 +105,13 @@ class TestLogLikelihood(unittest.TestCase):
         from biolith.models import occu, simulate
         from biolith.utils import fit, predict
 
-        data, _ = simulate()
+        data, _ = simulate(simulate_missing=True)
+        valid_obs = (
+            jnp.isfinite(data["obs"])
+            & jnp.isfinite(data["obs_covs"]).all(axis=-1)
+            & jnp.isfinite(data["site_covs"]).all(axis=-1)[:, None]
+        )
+
         results = fit(occu, **data)
         posterior_samples = predict(occu, results.mcmc, **data)
 
@@ -107,11 +121,11 @@ class TestLogLikelihood(unittest.TestCase):
 
         log_lik_manual = log_likelihood_manual(posterior_samples, data)
 
-        log_lik_per_obs = logsumexp(
-            log_lik[:, jnp.isfinite(data["obs"])], axis=0
-        ) - jnp.log(log_lik.shape[0])
+        log_lik_per_obs = logsumexp(log_lik[:, valid_obs], axis=0) - jnp.log(
+            log_lik.shape[0]
+        )
         log_lik_manual_per_obs = logsumexp(
-            log_lik_manual[:, jnp.isfinite(data["obs"])], axis=0
+            log_lik_manual[:, valid_obs], axis=0
         ) - jnp.log(log_lik_manual.shape[0])
 
         self.assertTrue(

@@ -49,9 +49,16 @@ def lppd(
     >>> lppd(occu, preds, **data)
     """
 
-    log_lik = log_likelihood(model_fn, posterior_samples, **kwargs)
+    valid_obs = (
+        jnp.isfinite(kwargs["obs"])
+        & jnp.isfinite(kwargs["obs_covs"]).all(axis=-1)
+        & jnp.isfinite(kwargs["site_covs"]).all(axis=-1)[:, None]
+    )
+    log_lik = log_likelihood(model_fn, posterior_samples, **kwargs)["y"].transpose(
+        (0, 2, 1)
+    )
     lppd = jnp.sum(
-        logsumexp(log_lik["y"], axis=0) - np.log(log_lik["y"].shape[0])
+        logsumexp(log_lik[:, valid_obs], axis=0) - np.log(log_lik.shape[0])
     ).item()
 
     return lppd
