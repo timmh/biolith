@@ -1,4 +1,4 @@
-from .deviance import deviance
+from .deviance import deviance, deviance_manual
 from .diagnostics import diagnostics
 from .log_likelihood import log_likelihood
 from .lppd import lppd, lppd_manual
@@ -7,6 +7,7 @@ from .residuals import residuals
 
 __all__ = [
     "deviance",
+    "deviance_manual",
     "log_likelihood",
     "lppd",
     "lppd_manual",

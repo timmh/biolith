@@ -731,7 +731,7 @@ class TestOccu(unittest.TestCase):
         residuals(posterior_samples, data["obs"])
 
         # Test deviance
-        deviance(posterior_samples, data["obs"])
+        deviance(occu, posterior_samples, **data)
 
         # Test diagnostics
         diagnostics(results.mcmc)

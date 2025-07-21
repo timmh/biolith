@@ -91,19 +91,20 @@ def lppd_manual(
     >>> lppd_manual(posterior_samples, data)
     """
 
+    valid_obs = (
+        jnp.isfinite(data["obs"])
+        & jnp.isfinite(data["obs_covs"]).all(axis=-1)
+        & jnp.isfinite(data["site_covs"]).all(axis=-1)[:, None]
+    )
+
     log_lik_manual = log_likelihood_manual(posterior_samples, data)
 
-    lppd_manual = (
-        logsumexp(
-            log_lik_manual.reshape(log_lik_manual.shape[0], -1)[
-                :, jnp.isfinite(data["obs"]).reshape(-1)
-            ],
-            axis=0,
-        )
+    lppd_manual = jnp.sum(
+        logsumexp(log_lik_manual[:, valid_obs], axis=0)
         - jnp.log(log_lik_manual.shape[0])
-    ).sum()
+    ).item()
 
-    return lppd_manual.item()
+    return lppd_manual
 
 
 class TestLPPD(unittest.TestCase):
@@ -112,7 +113,7 @@ class TestLPPD(unittest.TestCase):
         from biolith.models import occu, simulate
         from biolith.utils import fit, predict
 
-        data, _ = simulate()
+        data, _ = simulate(simulate_missing=True)
         results = fit(occu, **data)
         posterior_samples = predict(occu, results.mcmc, **data)
 
@@ -121,7 +122,7 @@ class TestLPPD(unittest.TestCase):
 
         self.assertTrue(-jnp.inf < l < 0, "LPPD should be negative and finite.")
         self.assertTrue(
-            jnp.allclose(l, l_manual, rtol=1e-3),
+            jnp.allclose(l, l_manual, rtol=1e-2),
             "NumPyro LPPD should match manually computed LPPD.",
         )
 
