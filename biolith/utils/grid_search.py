@@ -8,7 +8,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import numpyro.distributions as dist
-from sklearn.model_selection import StratifiedKFold
 
 from biolith.evaluation.lppd import lppd
 from biolith.utils.fit import FitResult, fit
@@ -209,6 +208,12 @@ def grid_search_priors(
         )
 
     # Initialize cross-validation
+    try:
+        from sklearn.model_selection import StratifiedKFold
+    except ImportError:
+        raise ImportError(
+            "sklearn is required for grid search. Please install before using grid search, e.g. using 'pip install scikit-learn'."
+        )
     cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_seed)
 
     best_score = float(-jnp.inf)
