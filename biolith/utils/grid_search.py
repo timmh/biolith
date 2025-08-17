@@ -157,6 +157,9 @@ def grid_search_priors(
     and issues warnings when model fits fail.
     """
 
+    # JIT compile model function in order to be able to clear its cache later
+    model_fn_jit = jax.jit(model_fn, static_argnames=["regressor_occ", "regressor_det"])
+
     # Set default prior types if not provided
     if prior_types is None:
         prior_types = ["normal", "laplace"]
@@ -289,7 +292,7 @@ def grid_search_priors(
 
                     # Fit model on training data
                     train_result = fit(
-                        model_fn,
+                        model_fn_jit,
                         site_covs=site_covs_train,
                         obs_covs=obs_covs_train,
                         obs=obs_train,
@@ -345,6 +348,7 @@ def grid_search_priors(
                     del train_result, val_predictions
                     jax.clear_caches()
                     jax.live_arrays().clear()
+                    model_fn_jit._clear_cache()  # type: ignore
                     gc.collect()
 
                 except Exception as e:
@@ -394,7 +398,7 @@ def grid_search_priors(
                         )
 
                     best_result = fit(
-                        model_fn,
+                        model_fn_jit,
                         site_covs=site_covs,
                         obs_covs=obs_covs,
                         obs=obs,
@@ -418,6 +422,12 @@ def grid_search_priors(
         raise RuntimeError(
             "Grid search failed: no successful parameter combinations found."
         )
+
+    # Clear caches one last time
+    jax.clear_caches()
+    jax.live_arrays().clear()
+    model_fn_jit._clear_cache()  # type: ignore
+    gc.collect()
 
     return GridSearchResult(best_result, best_params, best_score, cv_results)
 
