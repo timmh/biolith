@@ -1,4 +1,5 @@
 from collections import namedtuple
+from multiprocessing import Process, Queue
 from typing import Callable, Literal, Optional
 
 import jax
@@ -121,3 +122,75 @@ def fit(
     samples = rename_samples(samples, site_covs_names, obs_covs_names)
 
     return FitResult(samples, mcmc)
+
+
+def _fit_worker(queue, model_fn, fit_kwargs):
+    """Worker function to fit a model in a separate process."""
+
+    try:
+        result = fit(model_fn, **fit_kwargs)
+        queue.put(result)
+    except Exception as e:
+        queue.put(e)
+
+
+def fit_multiprocess(
+    model_fn: Callable,
+    timeout: Optional[int] = None,
+    **fit_kwargs,
+) -> FitResult:
+    """Fit a model in a separate process with timeout and error handling.
+
+    This function runs the fit operation in a separate process to isolate
+    memory usage.
+
+    Parameters
+    ----------
+    model_fn : Callable
+        The model function to fit.
+    timeout : int, optional
+        Timeout in seconds for the fitting process. If None, no timeout is applied.
+    **fit_kwargs
+        All other keyword arguments are passed directly to the fit function.
+
+    Returns
+    -------
+    FitResult
+        A tuple-like object containing the posterior samples and the MCMC object.
+
+    Raises
+    ------
+    TimeoutError
+        If the fitting process exceeds the specified timeout.
+    Exception
+        Any exception that occurred during the fitting process.
+
+    Examples
+    --------
+    >>> from biolith.models import simulate, occu
+    >>> from biolith.utils import fit_multiprocess
+    >>> data, _ = simulate()
+    >>> result = fit_multiprocess(occu, timeout=300, **data)
+    """
+
+    queue = Queue()
+    process = Process(
+        target=_fit_worker, args=(queue, model_fn, fit_kwargs), daemon=False
+    )
+
+    process.start()
+
+    try:
+        result = queue.get(timeout=timeout)
+    except Exception:
+        process.terminate()
+        process.join()
+        raise TimeoutError(f"Model fitting exceeded timeout of {timeout} seconds")
+
+    process.join()
+
+    # Check if the result is an exception
+    if isinstance(result, Exception):
+        raise result
+
+    return result

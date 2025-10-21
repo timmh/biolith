@@ -1,3 +1,4 @@
+import os
 import signal
 from contextlib import contextmanager
 
@@ -18,3 +19,8 @@ def time_limit(seconds):
         yield
     finally:
         signal.alarm(0)
+
+
+def force_jax_low_memory_mode():
+    os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+    os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
