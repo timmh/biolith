@@ -30,7 +30,7 @@ jobs:
         python-version: ${{ matrix.python-version }}
     - name: Install Python dependencies
       run: |
-        pip install -r requirements.txt
+        pip install -e .[dev]
         pip install rpy2  # for comparing to R packages
     - name: Test with unittest
       run: |

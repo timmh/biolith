@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "biolith"
+version = "0.0.10"
+description = "Bayesian Ecological Modeling in Python"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "Timm Haucke", email = "haucke@mit.edu"}
+]
+keywords = ["python", "occupancy", "numpyro", "bayesian", "ecology"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+]
+
+dependencies = [
+    "numpy==2.3.4",
+    "pandas==2.3.3",
+    "jax==0.8.0",  # Base CPU version
+    "numpyro==0.19.0",
+    "funsor==0.4.5",
+]
+
+[project.optional-dependencies]
+cuda11 = ["jax[cuda11]==0.8.0"]
+cuda12 = ["jax[cuda12]==0.8.0"]
+cuda13 = ["jax[cuda13]==0.8.0"]
+tpu = ["jax[tpu]==0.8.0"]
+rocm = ["jax[rocm]==0.8.0"]
+
+dev = [
+    "black",
+    "isort",
+    "docformatter",
+    "pylint",
+    "pyright",
+    "sphinx",
+    "sphinx_rtd_theme",
+    "myst_parser",
+]
+
+[project.urls]
+Documentation = "https://timm.haucke.xyz/biolith/"
+Source = "https://github.com/timmh/biolith"
+
+[tool.setuptools]
+packages = {find = {}}

@@ -12,10 +12,29 @@ Biolith is a Python package designed for Bayesian ecological modeling and analys
 
 ## Installation
 
-You can install Biolith using pip:
+Install Biolith using pip:
 
 ```bash
 pip install biolith
+```
+
+### Accelerator support
+
+For NVIDIA GPU support, check your CUDA version with `nvidia-smi` and install the corresponding JAX variant:
+
+```bash
+# CUDA 13.x
+pip install biolith[cuda13]
+```
+
+For AMD GPUs:
+```bash
+pip install biolith[rocm]
+```
+
+For Google Cloud TPU VMs:
+```bash
+pip install biolith[tpu]
 ```
 
 ## Usage
@@ -44,6 +63,12 @@ To see a real-world example on camera trap data, see [this Jupyter Notebook](./a
 API Documentation and examples are available [here](https://timm.haucke.xyz/biolith/).
 
 ## Development
+
+Make sure to install development dependencies, e.g. using:
+
+```bash
+pip install -e ".[dev]"
+```
 
 Run `python -m unittest` to run unit tests.
 
