@@ -8,6 +8,7 @@ import numpyro
 import numpyro.distributions as dist
 
 from biolith.regression import AbstractRegression, LinearRegression
+from biolith.utils.modeling import mask_missing_obs
 from biolith.utils.spatial import sample_spatial_effects, simulate_spatial_effects
 
 
@@ -207,19 +208,11 @@ def occu(
                 * (1 - (1 - z) * prob_fp_unoccupied),
             )
 
-            if obs is not None:
-                with numpyro.handlers.mask(mask=jnp.isfinite(obs)):
-                    numpyro.sample(
-                        f"y",
-                        dist.Bernoulli(prob_detection_fp),  # type: ignore
-                        obs=jnp.nan_to_num(obs),
-                        infer={"enumerate": "parallel"},
-                    )
-            else:
+            with mask_missing_obs(obs):
                 numpyro.sample(
                     f"y",
                     dist.Bernoulli(prob_detection_fp),  # type: ignore
-                    infer={"enumerate": "parallel"},
+                    obs=obs,
                 )
 
 

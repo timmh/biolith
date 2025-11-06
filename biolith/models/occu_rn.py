@@ -9,6 +9,7 @@ import numpyro.distributions as dist
 
 from biolith.regression import AbstractRegression, LinearRegression
 from biolith.utils.distributions import RightTruncatedPoisson
+from biolith.utils.modeling import mask_missing_obs
 from biolith.utils.spatial import sample_spatial_effects, simulate_spatial_effects
 
 
@@ -181,19 +182,11 @@ def occu_rn(
             )
             p_it = 1.0 - (1.0 - r_it) ** N_i[None, :]  # type: ignore
 
-            if obs is not None:
-                with numpyro.handlers.mask(mask=jnp.isfinite(obs)):
-                    numpyro.sample(
-                        "y",
-                        dist.Bernoulli(1 - (1 - p_it) * (1 - prob_fp_constant)),  # type: ignore
-                        obs=jnp.nan_to_num(obs),
-                        infer={"enumerate": "parallel"},
-                    )
-            else:
+            with mask_missing_obs(obs):
                 numpyro.sample(
                     "y",
                     dist.Bernoulli(1 - (1 - p_it) * (1 - prob_fp_constant)),  # type: ignore
-                    infer={"enumerate": "parallel"},
+                    obs=obs,
                 )
 
 

@@ -8,6 +8,7 @@ import numpyro
 import numpyro.distributions as dist
 
 from biolith.regression import AbstractRegression, LinearRegression
+from biolith.utils.modeling import mask_missing_obs
 from biolith.utils.spatial import sample_spatial_effects, simulate_spatial_effects
 
 
@@ -215,16 +216,11 @@ def occu_cop(
             )
             l_det = z * rate_detection + (1 - z) * rate_fp_unoccupied + rate_fp_constant
 
-            if obs is not None:
-                with numpyro.handlers.mask(mask=jnp.isfinite(obs)):
-                    numpyro.sample(
-                        f"y",
-                        dist.Poisson(jnp.nan_to_num(session_duration * l_det)),
-                        obs=jnp.nan_to_num(obs),
-                    )
-            else:
+            with mask_missing_obs(obs):
                 numpyro.sample(
-                    f"y", dist.Poisson(jnp.nan_to_num(session_duration * l_det))
+                    f"y",
+                    dist.Poisson(session_duration * l_det),
+                    obs=obs,
                 )
 
 
