@@ -40,8 +40,27 @@ def diagnostics(mcmc: MCMC, exclude_deterministic=True):
     else:
         frac_diverging = float("nan")
 
+    try:
+        mean_beta_sd = (
+            summary_dict["beta"]["std"].mean().item()
+            if "beta" in summary_dict
+            else float("nan")
+        )
+    except KeyError:
+        mean_beta_sd = float("nan")
+    try:
+        mean_alpha_sd = (
+            summary_dict["alpha"]["std"].mean().item()
+            if "alpha" in summary_dict
+            else float("nan")
+        )
+    except KeyError:
+        mean_alpha_sd = float("nan")
+
     return dict(
         mean_r_hat=mean_r_hat,
         mean_frac_eff=mean_frac_eff,
         frac_diverging=frac_diverging,
+        mean_beta_sd=mean_beta_sd,
+        mean_alpha_sd=mean_alpha_sd,
     )

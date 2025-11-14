@@ -44,8 +44,9 @@ def log_likelihood(
         k: v for k, v in posterior_samples.items() if k not in observation_keys
     }
 
-    with numpyro.handlers.block(), numpyro.handlers.seed(
-        rng_seed=jax.random.PRNGKey(0)
+    with (
+        numpyro.handlers.block(),
+        numpyro.handlers.seed(rng_seed=jax.random.PRNGKey(0)),
     ):
         log_lik = numpyro_log_likelihood(model_fn, posterior_samples, **kwargs)
 

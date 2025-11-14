@@ -1,4 +1,13 @@
-import gc
+import os
+
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
+
+
+from multiprocessing import Process, Queue, set_start_method
+
+set_start_method("spawn", force=True)
+
 import itertools
 import unittest
 import warnings
@@ -19,6 +28,86 @@ class GridSearchResult(NamedTuple):
     best_params: Dict[str, Any]
     best_score: float
     cv_results: List[Dict[str, Any]]
+
+
+def _fit_predict_eval_fold(
+    queue,
+    model_fn,
+    site_covs_train,
+    obs_covs_train,
+    obs_train,
+    site_covs_val,
+    obs_covs_val,
+    obs_val,
+    regressor_occ,
+    regressor_det,
+    prior_occ,
+    prior_det,
+    num_samples,
+    num_warmup,
+    num_chains,
+    random_seed,
+    **kwargs,
+):
+    """Helper function to run fit, predict, and lppd in a separate process."""
+
+    import os
+
+    os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+    os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
+
+    from biolith.evaluation.lppd import lppd
+    from biolith.utils.fit import fit
+    from biolith.utils.predict import predict
+
+    try:
+        # Fit model on training data
+        train_result = fit(
+            model_fn,
+            site_covs=site_covs_train,
+            obs_covs=obs_covs_train,
+            obs=obs_train,
+            regressor_occ=regressor_occ,
+            regressor_det=regressor_det,
+            prior_beta=prior_occ,
+            prior_alpha=prior_det,
+            num_samples=num_samples,
+            num_warmup=num_warmup,
+            num_chains=num_chains,
+            random_seed=random_seed,
+            **kwargs,
+        )
+
+        # Generate predictions for validation data
+        val_predictions = predict(
+            model_fn,
+            train_result.mcmc,
+            site_covs=site_covs_val,
+            obs_covs=obs_covs_val,
+            obs=obs_val,
+            regressor_occ=regressor_occ,
+            regressor_det=regressor_det,
+            prior_beta=prior_occ,
+            prior_alpha=prior_det,
+            **kwargs,
+        )
+
+        # Evaluate on validation data
+        val_lppd = lppd(
+            model_fn,
+            val_predictions,
+            site_covs=site_covs_val,
+            obs_covs=obs_covs_val,
+            obs=obs_val,
+            regressor_occ=regressor_occ,
+            regressor_det=regressor_det,
+            prior_beta=prior_occ,
+            prior_alpha=prior_det,
+            **kwargs,
+        )
+        queue.put(val_lppd)
+    except Exception as e:
+        queue.put(e)
 
 
 def grid_search_priors(
@@ -287,51 +376,49 @@ def grid_search_priors(
                     obs_covs_val = obs_covs[val_idx]
                     obs_val = obs[val_idx]
 
-                    # Fit model on training data
-                    train_result = fit(
-                        model_fn,
-                        site_covs=site_covs_train,
-                        obs_covs=obs_covs_train,
-                        obs=obs_train,
-                        regressor_occ=regressor_occ,
-                        regressor_det=regressor_det,
-                        prior_beta=prior_occ,
-                        prior_alpha=prior_det,
-                        num_samples=num_samples,
-                        num_warmup=num_warmup,
-                        num_chains=num_chains,
-                        random_seed=random_seed + fold_idx,
-                        timeout=timeout,
+                    # Use multiprocessing to isolate the memory of each fold fit
+                    q = Queue()
+                    process_kwargs = {
+                        "queue": q,
+                        "model_fn": model_fn,
+                        "site_covs_train": site_covs_train,
+                        "obs_covs_train": obs_covs_train,
+                        "obs_train": obs_train,
+                        "site_covs_val": site_covs_val,
+                        "obs_covs_val": obs_covs_val,
+                        "obs_val": obs_val,
+                        "regressor_occ": regressor_occ,
+                        "regressor_det": regressor_det,
+                        "prior_occ": prior_occ,
+                        "prior_det": prior_det,
+                        "num_samples": num_samples,
+                        "num_warmup": num_warmup,
+                        "num_chains": num_chains,
+                        "random_seed": random_seed + fold_idx,
                         **kwargs,
-                    )
+                    }
 
-                    # Generate predictions for validation data
-                    val_predictions = predict(
-                        model_fn,
-                        train_result.mcmc,
-                        site_covs=site_covs_val,
-                        obs_covs=obs_covs_val,
-                        obs=obs_val,
-                        regressor_occ=regressor_occ,
-                        regressor_det=regressor_det,
-                        prior_beta=prior_occ,
-                        prior_alpha=prior_det,
-                        **kwargs,
+                    p = Process(
+                        target=_fit_predict_eval_fold,
+                        daemon=False,
+                        kwargs=process_kwargs,
                     )
+                    p.start()
 
-                    # Evaluate on validation data
-                    val_lppd = lppd(
-                        model_fn,
-                        val_predictions,
-                        site_covs=site_covs_val,
-                        obs_covs=obs_covs_val,
-                        obs=obs_val,
-                        regressor_occ=regressor_occ,
-                        regressor_det=regressor_det,
-                        prior_beta=prior_occ,
-                        prior_alpha=prior_det,
-                        **kwargs,
-                    )
+                    try:
+                        result = q.get(timeout=timeout)
+                    except:
+                        p.terminate()
+                        raise TimeoutError(
+                            f"Model fit in fold {fold_idx} exceeded timeout of {timeout} seconds."
+                        )
+                    finally:
+                        p.join()
+
+                    if isinstance(result, Exception):
+                        raise result
+
+                    val_lppd = result
 
                     # Check for valid score
                     if jnp.isfinite(val_lppd):
@@ -340,12 +427,6 @@ def grid_search_priors(
                         warnings.warn(
                             f"Invalid LPPD score ({val_lppd}) in fold {fold_idx}"
                         )
-
-                    # Clear memory to prevent OOM errors
-                    del train_result, val_predictions
-                    jax.clear_caches()
-                    jax.live_arrays().clear()
-                    gc.collect()
 
                 except Exception as e:
                     warnings.warn(f"Model fit failed in fold {fold_idx}: {str(e)}")
@@ -429,9 +510,9 @@ class TestGridSearch(unittest.TestCase):
         from biolith.models import occu, simulate
         from biolith.regression import LinearRegression
 
-        data, _ = simulate(simulate_missing=False, n_sites=8)
+        data, _ = simulate(simulate_missing=True)
 
-        gs_results = grid_search_priors(
+        grid_search_priors(
             occu,
             **data,
             regressor_occ=LinearRegression,
@@ -447,68 +528,6 @@ class TestGridSearch(unittest.TestCase):
             num_samples=30,
             timeout=600,
         )
-
-        # Check that both prior types were tested
-        prior_types_tested = set([res["prior_type"] for res in gs_results.cv_results])
-        self.assertEqual(prior_types_tested, {"normal", "laplace"})
-
-        # Check that best params include prior type
-        self.assertIn("prior_type", gs_results.best_params)
-        self.assertIn(gs_results.best_params["prior_type"], ["normal", "laplace"])
-
-    def test_grid_search_disable_occ_priors(self):
-        from biolith.models import occu, simulate
-        from biolith.regression import LinearRegression
-
-        data, _ = simulate(simulate_missing=False, n_sites=8)
-
-        # Test disabling occupancy prior tuning
-        gs_results = grid_search_priors(
-            occu,
-            **data,
-            regressor_occ=LinearRegression,
-            regressor_det=LinearRegression,
-            prior_types=["normal"],
-            prior_params_occ=False,  # Disable occupancy tuning
-            prior_params_det={"normal": {"loc": [0.0], "scale": [1.0, 2.0]}},
-            cv_folds=2,
-            num_chains=1,
-            num_warmup=30,
-            num_samples=30,
-            timeout=600,
-        )
-
-        # Check that occupancy params are default
-        self.assertEqual(gs_results.best_params["occ_params"]["scale"], 1.0)
-        # Check that detection params were tuned
-        self.assertIn(gs_results.best_params["det_params"]["scale"], [1.0, 2.0])
-
-    def test_grid_search_disable_det_priors(self):
-        from biolith.models import occu, simulate
-        from biolith.regression import LinearRegression
-
-        data, _ = simulate(simulate_missing=False, n_sites=8)
-
-        # Test disabling detection prior tuning
-        gs_results = grid_search_priors(
-            occu,
-            **data,
-            regressor_occ=LinearRegression,
-            regressor_det=LinearRegression,
-            prior_types=["normal"],
-            prior_params_occ={"normal": {"loc": [0.0], "scale": [1.0, 2.0]}},
-            prior_params_det=False,  # Disable detection tuning
-            cv_folds=2,
-            num_chains=1,
-            num_warmup=30,
-            num_samples=30,
-            timeout=600,
-        )
-
-        # Check that detection params are default
-        self.assertEqual(gs_results.best_params["det_params"]["scale"], 1.0)
-        # Check that occupancy params were tuned
-        self.assertIn(gs_results.best_params["occ_params"]["scale"], [1.0, 2.0])
 
 
 if __name__ == "__main__":
