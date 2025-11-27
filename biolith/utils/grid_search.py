@@ -46,6 +46,8 @@ def _fit_predict_eval_fold(
     num_samples,
     num_warmup,
     num_chains,
+    kernel,
+    init_strategy,
     random_seed,
     **kwargs,
 ):
@@ -74,6 +76,8 @@ def _fit_predict_eval_fold(
             num_samples=num_samples,
             num_warmup=num_warmup,
             num_chains=num_chains,
+            kernel=kernel,
+            init_strategy=init_strategy,
             random_seed=random_seed,
             **kwargs,
         )
@@ -125,6 +129,8 @@ def grid_search_priors(
     num_samples: int = 1000,
     num_warmup: int = 1000,
     num_chains: int = 5,
+    kernel: Optional[str] = None,
+    init_strategy: Optional[Callable] = None,
     timeout: Optional[int] = None,
     **kwargs,
 ) -> GridSearchResult:
@@ -175,6 +181,10 @@ def grid_search_priors(
         Number of warmup samples per chain. Default is 1000.
     num_chains : int, optional
         Number of MCMC chains. Default is 5.
+    kernel : str, optional
+        Sampling kernel to use. Default is None (uses fit function default).
+    init_strategy : Callable, optional
+        Initialization strategy for the MCMC sampler. Default is None (uses fit function default).
     timeout : int, optional
         Timeout in seconds for each model fit. Default is None (no timeout).
     **kwargs
@@ -394,6 +404,8 @@ def grid_search_priors(
                         "num_samples": num_samples,
                         "num_warmup": num_warmup,
                         "num_chains": num_chains,
+                        "kernel": kernel,
+                        "init_strategy": init_strategy,
                         "random_seed": random_seed + fold_idx,
                         **kwargs,
                     }

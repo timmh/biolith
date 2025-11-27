@@ -4,6 +4,7 @@ from typing import Callable, Literal, Optional
 
 import jax
 from numpyro.infer import HMC, HMCECS, MCMC, NUTS, DiscreteHMCGibbs, MixedHMC
+from numpyro.infer.initialization import init_to_uniform
 
 from biolith.regression.bart import BARTRegression
 
@@ -25,6 +26,7 @@ def fit(
     kernel: Optional[
         Literal["nuts", "hmc", "mixed_hmc", "discrete_hmc_gibbs", "hmcecs"]
     ] = None,
+    init_strategy: Optional[Callable] = None,
     timeout: int | None = None,
     **kwargs,
 ) -> FitResult:
@@ -54,6 +56,9 @@ def fit(
         Name of the sampling kernel to use. Possible values include
         ``"nuts"``, ``"hmc"``, ``"mixed_hmc"``, ``"discrete_hmc_gibbs"``,
         or ``"hmcecs"``. Defaults to ``"nuts"`` for most models.
+    init_strategy:
+        Initialization strategy for the MCMC sampler. Defaults to
+        ``init_to_uniform`` if not provided.
     timeout:
         Optional timeout (in seconds) for the sampling step.
     **kwargs:
@@ -85,11 +90,17 @@ def fit(
             kernel = "discrete_hmc_gibbs"
 
     kernel_inst = dict(
-        nuts=lambda: NUTS(model_fn),
-        hmc=lambda: HMC(model_fn),
-        mixed_hmc=lambda: MixedHMC(HMC(model_fn)),
-        discrete_hmc_gibbs=lambda: DiscreteHMCGibbs(NUTS(model_fn)),
-        hmcecs=lambda: HMCECS(NUTS(model_fn)),
+        nuts=lambda: NUTS(model_fn, init_strategy=init_strategy or init_to_uniform),
+        hmc=lambda: HMC(model_fn, init_strategy=init_strategy or init_to_uniform),
+        mixed_hmc=lambda: MixedHMC(
+            HMC(model_fn, init_strategy=init_strategy or init_to_uniform)
+        ),
+        discrete_hmc_gibbs=lambda: DiscreteHMCGibbs(
+            NUTS(model_fn, init_strategy=init_strategy or init_to_uniform)
+        ),
+        hmcecs=lambda: HMCECS(
+            NUTS(model_fn, init_strategy=init_strategy or init_to_uniform)
+        ),
     )[kernel]()
     mcmc = MCMC(
         kernel_inst,
