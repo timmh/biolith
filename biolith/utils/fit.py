@@ -8,7 +8,7 @@ from numpyro.infer.initialization import init_to_uniform
 
 from biolith.regression.bart import BARTRegression
 
-from .data import dataframes_to_arrays, rename_samples
+from .data import prepare_data, rename_samples
 
 FitResult = namedtuple("FitResult", ["samples", "mcmc"])
 
@@ -79,7 +79,7 @@ def fit(
     """
 
     site_covs, obs_covs, obs, session_duration, site_covs_names, obs_covs_names = (
-        dataframes_to_arrays(site_covs, obs_covs, obs, session_duration)
+        prepare_data(site_covs, obs_covs, obs, session_duration)
     )
 
     if kernel is None:

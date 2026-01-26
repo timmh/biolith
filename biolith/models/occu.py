@@ -46,7 +46,8 @@ def occu(
     site_covs : jnp.ndarray
         An array of site-level covariates of shape (n_sites, n_site_covs).
     obs_covs : jnp.ndarray
-        An array of observation-level covariates of shape (n_sites, n_revisits, n_obs_covs).
+        An array of observation-level covariates of shape
+        (n_sites, n_periods, n_replicates, n_obs_covs).
     coords : jnp.ndarray, optional
         Coordinates for a spatial random effect when provided.
     ell : float
@@ -56,7 +57,7 @@ def occu(
     false_positives_unoccupied : bool
         Flag indicating whether to model false positives in unoccupied sites.
     obs : jnp.ndarray, optional
-        Observation matrix of shape (n_sites, n_revisits) or None.
+        Observation matrix of shape (n_sites, n_periods, n_replicates) or None.
     prior_beta : numpyro.distributions.Distribution
         Prior distribution for the site-level regression coefficients.
     prior_alpha : numpyro.distributions.Distribution
@@ -93,12 +94,12 @@ def occu(
 
     # Check input data
     assert (
-        obs is None or obs.ndim == 2
-    ), "obs must be None or of shape (n_sites, time_periods)"
+        obs is None or obs.ndim == 3
+    ), "obs must be None or of shape (n_sites, n_periods, n_replicates)"
     assert site_covs.ndim == 2, "site_covs must be of shape (n_sites, n_site_covs)"
     assert (
-        obs_covs.ndim == 3
-    ), "obs_covs must be of shape (n_sites, time_periods, n_obs_covs)"
+        obs_covs.ndim == 4
+    ), "obs_covs must be of shape (n_sites, n_periods, n_replicates, n_obs_covs)"
     # assert obs is None or (obs[np.isfinite(obs)] >= 0).all(), "observations must be non-negative"  # TODO: re-enable
     # assert obs is None or (obs[np.isfinite(obs)] <= 1).all(), "observations must be binary"  # TODO: re-enable
     assert not (
@@ -106,24 +107,26 @@ def occu(
     ), "false_positives_constant and false_positives_unoccupied cannot both be True"
 
     n_sites = site_covs.shape[0]
-    time_periods = obs_covs.shape[1]
+    n_periods = obs_covs.shape[1]
+    n_replicates = obs_covs.shape[2]
     n_site_covs = site_covs.shape[1]
-    n_obs_covs = obs_covs.shape[2]
+    n_obs_covs = obs_covs.shape[3]
 
     assert (
         n_sites == site_covs.shape[0] == obs_covs.shape[0]
     ), "site_covs and obs_covs must have the same number of sites"
     assert (
-        time_periods == obs_covs.shape[1]
-    ), "obs_covs must have the same number of time periods as obs"
+        n_periods == obs_covs.shape[1]
+    ), "obs_covs must have the same number of periods as obs"
     if obs is not None:
         assert n_sites == obs.shape[0], "obs must have n_sites rows"
-        assert time_periods == obs.shape[1], "obs must have time_periods columns"
+        assert n_periods == obs.shape[1], "obs must have n_periods columns"
+        assert n_replicates == obs.shape[2], "obs must have n_replicates columns"
 
     # Mask observations where covariates are missing
-    obs_mask = jnp.isnan(obs_covs).any(axis=-1) | jnp.tile(
-        jnp.isnan(site_covs).any(axis=-1)[:, None], (1, time_periods)
-    )
+    obs_mask = jnp.isnan(obs_covs).any(axis=-1) | jnp.isnan(site_covs).any(axis=-1)[
+        :, None, None
+    ]
     obs = jnp.where(obs_mask, jnp.nan, obs) if obs is not None else None
     obs_covs = jnp.nan_to_num(obs_covs)
     site_covs = jnp.nan_to_num(site_covs)
@@ -165,8 +168,8 @@ def occu(
 
     # Transpose in order to fit NumPyro's plate structure
     site_covs = site_covs.transpose((1, 0))
-    obs_covs = obs_covs.transpose((2, 1, 0))
-    obs = obs.transpose((1, 0)) if obs is not None else None
+    obs_covs = obs_covs.transpose((3, 2, 1, 0))
+    obs = obs.transpose((2, 1, 0)) if obs is not None else None
 
     with numpyro.plate("site", n_sites, dim=-1):
 
@@ -178,48 +181,50 @@ def occu(
             site_re_occ = 0.0
             site_re_det = 0.0
 
-        # Occupancy process
-        psi = numpyro.deterministic(
-            "psi",
-            jax.nn.sigmoid(reg_occ(site_covs) + w + site_re_occ),
-        )
-        z = numpyro.sample(
-            "z", dist.Bernoulli(probs=psi), infer={"enumerate": "parallel"}  # type: ignore
-        )
+        occ_linear = reg_occ(site_covs) + w + site_re_occ
 
-        with numpyro.plate("time_periods", time_periods, dim=-2):
+        with numpyro.plate("period", n_periods, dim=-2):
 
-            # Observation-level random effects
-            if obs_random_effects:
-                obs_re = numpyro.sample("obs_re", dist.Normal(0, obs_re_sd))  # type: ignore
-            else:
-                obs_re = 0.0
-
-            # Detection process
-            prob_detection = numpyro.deterministic(
-                f"prob_detection",
-                jax.nn.sigmoid(reg_det(obs_covs) + site_re_det + obs_re),
-            )
-            prob_detection_fp = numpyro.deterministic(
-                "prob_detection_fp",
-                1
-                - (1 - z * prob_detection)
-                * (1 - prob_fp_constant)
-                * (1 - (1 - z) * prob_fp_unoccupied),
+            # Occupancy process
+            psi = numpyro.deterministic("psi", jax.nn.sigmoid(occ_linear))
+            z = numpyro.sample(
+                "z", dist.Bernoulli(probs=psi), infer={"enumerate": "parallel"}  # type: ignore
             )
 
-            with mask_missing_obs(obs):
-                numpyro.sample(
-                    f"y",
-                    dist.Bernoulli(prob_detection_fp),  # type: ignore
-                    obs=obs,
+            with numpyro.plate("replicate", n_replicates, dim=-3):
+
+                # Observation-level random effects
+                if obs_random_effects:
+                    obs_re = numpyro.sample("obs_re", dist.Normal(0, obs_re_sd))  # type: ignore
+                else:
+                    obs_re = 0.0
+
+                # Detection process
+                prob_detection = numpyro.deterministic(
+                    "prob_detection",
+                    jax.nn.sigmoid(reg_det(obs_covs) + site_re_det + obs_re),
                 )
+                prob_detection_fp = numpyro.deterministic(
+                    "prob_detection_fp",
+                    1
+                    - (1 - z * prob_detection)
+                    * (1 - prob_fp_constant)
+                    * (1 - (1 - z) * prob_fp_unoccupied),
+                )
+
+                with mask_missing_obs(obs):
+                    numpyro.sample(
+                        "y",
+                        dist.Bernoulli(prob_detection_fp),  # type: ignore
+                        obs=obs,
+                    )
 
 
 def simulate(
     n_site_covs: int = 1,
     n_obs_covs: int = 1,
     n_sites: int = 100,
+    n_periods: int = 1,
     deployment_days_per_site: int = 365,
     session_duration: int = 7,
     prob_fp_unoccupied: float = 0.0,
@@ -304,48 +309,53 @@ def simulate(
             )
         )
         z = rng.binomial(
-            n=1, p=psi, size=n_sites
-        )  # vector of latent occupancy status for each site
+            n=1, p=psi, size=(n_periods, n_sites)
+        )  # matrix of latent occupancy status for each site and period
 
         # Generate detection data
-        time_periods = round(deployment_days_per_site / session_duration)
+        n_replicates = round(deployment_days_per_site / session_duration)
 
         # Create matrix of detection covariates
-        obs_covs = rng.normal(size=(n_sites, time_periods, n_obs_covs))
+        obs_covs = rng.normal(size=(n_sites, n_periods, n_replicates, n_obs_covs))
 
         # Generate observation-level random effects
         if obs_random_effects:
-            obs_re = rng.normal(0, obs_re_sd, size=(n_sites, time_periods))
+            obs_re = rng.normal(0, obs_re_sd, size=(n_sites, n_periods, n_replicates))
         else:
-            obs_re = np.zeros((n_sites, time_periods))
+            obs_re = np.zeros((n_sites, n_periods, n_replicates))
 
         prob_detection = 1 / (
             1
             + np.exp(
                 -(
-                    alpha[0].repeat(n_sites)[:, None]
+                    alpha[0]
                     + np.sum(
                         [alpha[i + 1] * obs_covs[..., i] for i in range(n_obs_covs)],
                         axis=0,
                     )
-                    + site_re_det[:, None]
+                    + site_re_det[:, None, None]
                     + obs_re
                 )
             )
         )
 
         # Create matrix of detections
-        obs = np.zeros((n_sites, time_periods))
-        prob_detection_fp = np.zeros((n_sites, time_periods))
+        obs = np.zeros((n_sites, n_periods, n_replicates))
+        prob_detection_fp = np.zeros((n_sites, n_periods, n_replicates))
 
         for i in range(n_sites):
             # According to the Royle model in unmarked, false positives are generated only if the site is unoccupied
             # Note this is different than how we think about false positives being a random occurrence per image.
             # For now, this is generating positive/negative per time period, which is different than per image.
-            prob_detection_fp[i, :] = 1 - (1 - (z[i] * prob_detection[i, :])) * (
-                1 - prob_fp_constant
-            ) * (1 - ((1 - z[i]) * prob_fp_unoccupied))
-            obs[i, :] = rng.binomial(n=1, p=prob_detection_fp[i, :], size=time_periods)
+            prob_detection_fp[i, :, :] = (
+                1
+                - (1 - (z[:, i][:, None] * prob_detection[i, :, :]))
+                * (1 - prob_fp_constant)
+                * (1 - ((1 - z[:, i][:, None]) * prob_fp_unoccupied))
+            )
+            obs[i, :, :] = rng.binomial(
+                n=1, p=prob_detection_fp[i, :, :], size=(n_periods, n_replicates)
+            )
 
         # Convert counts into observed occupancy
         obs = (obs >= 1) * 1.0
@@ -437,6 +447,26 @@ class TestOccu(unittest.TestCase):
                 ],
                 true_params["alpha"],
                 atol=0.5,
+            )
+        )
+
+    def test_occu_multi_season(self):
+        data, true_params = simulate(simulate_missing=True, n_periods=3)
+
+        from biolith.utils import fit
+
+        results = fit(
+            occu,
+            **data,
+            num_chains=1,
+            num_samples=300,
+            num_warmup=300,
+            timeout=600,
+        )
+
+        self.assertTrue(
+            np.allclose(
+                results.samples["psi"].mean(), true_params["z"].mean(), atol=0.15
             )
         )
 
@@ -551,7 +581,10 @@ class TestOccu(unittest.TestCase):
         num_samples = 1000
 
         # fit the biolith model
-        from rpy2.robjects.packages import importr
+        try:
+            from rpy2.robjects.packages import importr
+        except ImportError:
+            self.skipTest("rpy2 is not installed.")
 
         from biolith.utils import fit
 
@@ -575,7 +608,7 @@ class TestOccu(unittest.TestCase):
 
         # Prepare data for R
         # Observations (y) - can have NaNs, spOccupancy handles them.
-        y_py = data["obs"].copy()  # Shape: (n_sites, time_periods)
+        y_py = data["obs"][:, 0, :].copy()  # Shape: (n_sites, time_periods)
         y_r = numpy2ri_module.py2rpy(y_py)  # Converts to R matrix, np.nan to R NA
 
         # Occupancy covariates (site-level)
@@ -602,7 +635,7 @@ class TestOccu(unittest.TestCase):
         # Detection covariates (observation-level)
         # Replace NaNs with 0.
         det_covs_py = np.nan_to_num(
-            data["obs_covs"].copy()
+            data["obs_covs"][:, 0, :, :].copy()
         )  # Shape: (n_sites, time_periods, n_obs_covs)
         _, time_periods, n_obs_covs = det_covs_py.shape
 

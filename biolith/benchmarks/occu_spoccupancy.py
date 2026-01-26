@@ -148,7 +148,7 @@ def benchmark_spoccupancy(
         spOccupancy_r = importr("spOccupancy")
 
         # Prepare data for R
-        y_py = data["obs"].copy()
+        y_py = data["obs"][:, 0, :].copy()
         y_r = numpy2ri_module.py2rpy(y_py)
 
         # Occupancy covariates (site-level)
@@ -170,7 +170,7 @@ def benchmark_spoccupancy(
         )
 
         # Detection covariates (observation-level)
-        det_covs_py = np.nan_to_num(data["obs_covs"].copy())
+        det_covs_py = np.nan_to_num(data["obs_covs"][:, 0, :, :].copy())
         _, time_periods, n_obs_covs = det_covs_py.shape
 
         det_covs_r_elements = {}

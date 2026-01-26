@@ -52,10 +52,10 @@ def lppd(
     valid_obs = (
         jnp.isfinite(kwargs["obs"])
         & jnp.isfinite(kwargs["obs_covs"]).all(axis=-1)
-        & jnp.isfinite(kwargs["site_covs"]).all(axis=-1)[:, None]
+        & jnp.isfinite(kwargs["site_covs"]).all(axis=-1)[:, None, None]
     )
     log_lik = log_likelihood(model_fn, posterior_samples, **kwargs)["y"].transpose(
-        (0, 2, 1)
+        (0, 3, 2, 1)
     )
     lppd = jnp.sum(
         logsumexp(log_lik[:, valid_obs], axis=0) - np.log(log_lik.shape[0])
@@ -94,7 +94,7 @@ def lppd_manual(
     valid_obs = (
         jnp.isfinite(data["obs"])
         & jnp.isfinite(data["obs_covs"]).all(axis=-1)
-        & jnp.isfinite(data["site_covs"]).all(axis=-1)[:, None]
+        & jnp.isfinite(data["site_covs"]).all(axis=-1)[:, None, None]
     )
 
     log_lik_manual = log_likelihood_manual(posterior_samples, data)

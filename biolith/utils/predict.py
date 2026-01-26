@@ -3,7 +3,7 @@ from typing import Callable
 import jax
 from numpyro.infer import Predictive
 
-from .data import dataframes_to_arrays, rename_samples
+from .data import prepare_data, rename_samples
 
 
 def predict(
@@ -61,7 +61,7 @@ def predict(
     """
 
     site_covs, obs_covs, obs, session_duration, site_covs_names, obs_covs_names = (
-        dataframes_to_arrays(site_covs, obs_covs, obs, session_duration)
+        prepare_data(site_covs, obs_covs, obs, session_duration)
     )
 
     predictive = Predictive(

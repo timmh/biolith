@@ -78,26 +78,23 @@ def log_likelihood_manual(
     >>> log_likelihood_manual(posterior_samples, data
     """
 
-    log_lik_manual = jnp.log(
-        jnp.clip(
-            posterior_samples["prob_detection"].transpose((0, 2, 1))
-            * posterior_samples["psi"][:, :, None],
-            min=eps,
-            max=1 - eps,
+    obs_transposed = data["obs"].transpose((2, 1, 0))
+    prob_detection = posterior_samples["prob_detection"]
+    psi = posterior_samples["psi"]
+    if psi.ndim == 2:
+        psi = psi[:, None, :]
+    if psi.shape[1] != obs_transposed.shape[1]:
+        psi = jnp.broadcast_to(
+            psi, (psi.shape[0], obs_transposed.shape[1], psi.shape[2])
         )
-    ) * data["obs"][None, :, :] + jnp.log(
-        jnp.clip(
-            1
-            - posterior_samples["prob_detection"].transpose((0, 2, 1))
-            * posterior_samples["psi"][:, :, None],
-            min=eps,
-            max=1 - eps,
-        )
-    ) * (
-        1 - data["obs"][None, :, :]
-    )
+    psi = psi[:, None, :, :]
 
-    return log_lik_manual
+    prob_det_occ = jnp.clip(prob_detection * psi, min=eps, max=1 - eps)
+    log_lik_manual = jnp.log(prob_det_occ) * obs_transposed[None, ...] + jnp.log(
+        jnp.clip(1 - prob_detection * psi, min=eps, max=1 - eps)
+    ) * (1 - obs_transposed[None, ...])
+
+    return log_lik_manual.transpose((0, 3, 2, 1))
 
 
 class TestLogLikelihood(unittest.TestCase):
@@ -110,14 +107,14 @@ class TestLogLikelihood(unittest.TestCase):
         valid_obs = (
             jnp.isfinite(data["obs"])
             & jnp.isfinite(data["obs_covs"]).all(axis=-1)
-            & jnp.isfinite(data["site_covs"]).all(axis=-1)[:, None]
+            & jnp.isfinite(data["site_covs"]).all(axis=-1)[:, None, None]
         )
 
         results = fit(occu, **data)
         posterior_samples = predict(occu, results.mcmc, **data)
 
         log_lik = log_likelihood(occu, posterior_samples, **data)["y"].transpose(
-            (0, 2, 1)
+            (0, 3, 2, 1)
         )
 
         log_lik_manual = log_likelihood_manual(posterior_samples, data)

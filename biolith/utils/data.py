@@ -1,14 +1,12 @@
 import copy
-from typing import Any, List, Optional, Tuple, cast
+from typing import Any, List, Optional
 
 import jax.numpy as jnp
 import numpy as np
 import pandas as pd
 
 
-def dataframes_to_arrays(
-    site_covs=None, obs_covs=None, obs=None, session_duration=None
-):
+def prepare_data(site_covs=None, obs_covs=None, obs=None, session_duration=None):
 
     site_covs_names = None
     obs_covs_names = None
@@ -45,14 +43,11 @@ def dataframes_to_arrays(
         site_covs = site_covs.to_numpy()
     if isinstance(obs_covs, pd.DataFrame):
         if not isinstance(obs_covs.columns, pd.MultiIndex):
-            obs_covs = obs_covs.to_numpy()
-            if obs_covs.ndim == 2:
-                obs_covs = obs_covs[:, :, None]
-            obs_covs = cast(np.ndarray[Tuple[int, int, int], Any], obs_covs)
-        else:
-            assert (
-                len(obs_covs.columns.levels) == 2
-            ), "obs_covs with MultiIndex columns must have columns of exactly two levels"
+            raise ValueError(
+                "obs_covs DataFrame must use MultiIndex columns with levels "
+                "(covariate, period, replicate) for multi-season data."
+            )
+        if len(obs_covs.columns.levels) == 2:
             obs_covs_names = ["intercept"] + [c for c in obs_covs.columns.levels[0]]
             obs_covs = (
                 obs_covs.to_numpy()
@@ -63,15 +58,79 @@ def dataframes_to_arrays(
                 )
                 .transpose(0, 2, 1)
             )
+            obs_covs = obs_covs[:, None, :, :]
+        elif len(obs_covs.columns.levels) == 3:
+            obs_covs_names = ["intercept"] + [c for c in obs_covs.columns.levels[0]]
+            obs_covs = (
+                obs_covs.to_numpy()
+                .reshape(
+                    obs_covs.shape[0],
+                    len(obs_covs.columns.levels[0]),
+                    len(obs_covs.columns.levels[1]),
+                    len(obs_covs.columns.levels[2]),
+                )
+                .transpose(0, 2, 3, 1)
+            )
+        else:
+            raise ValueError(
+                "obs_covs with MultiIndex columns must have 2 or 3 levels."
+            )
     if isinstance(session_duration, pd.DataFrame):
-        session_duration = session_duration.to_numpy()
+        if isinstance(session_duration.columns, pd.MultiIndex):
+            if len(session_duration.columns.levels) == 2:
+                session_duration = (
+                    session_duration.to_numpy()
+                    .reshape(
+                        session_duration.shape[0],
+                        len(session_duration.columns.levels[0]),
+                        len(session_duration.columns.levels[1]),
+                    )
+                    .transpose(0, 1, 2)
+                )
+            else:
+                raise ValueError(
+                    "session_duration with MultiIndex columns must have 2 levels."
+                )
+        else:
+            session_duration = session_duration.to_numpy()
     if isinstance(obs, pd.DataFrame):
-        obs = obs.to_numpy()
+        if isinstance(obs.columns, pd.MultiIndex):
+            if len(obs.columns.levels) == 2:
+                obs = (
+                    obs.to_numpy()
+                    .reshape(
+                        obs.shape[0],
+                        len(obs.columns.levels[0]),
+                        len(obs.columns.levels[1]),
+                    )
+                    .transpose(0, 1, 2)
+                )
+            else:
+                raise ValueError("obs with MultiIndex columns must have 2 levels.")
+        else:
+            obs = obs.to_numpy()
+
+    def _ensure_season_dim(arr, name: str):
+        if arr is None or not isinstance(arr, (np.ndarray, jnp.ndarray)):
+            return arr
+        if name == "obs_covs":
+            if arr.ndim == 2:
+                arr = arr[:, :, None]
+            if arr.ndim == 3:
+                arr = arr[:, None, :, :]
+        elif name in ("obs", "session_duration"):
+            if arr.ndim == 2:
+                arr = arr[:, None, :]
+        return arr
+
+    obs_covs = _ensure_season_dim(obs_covs, "obs_covs")
+    obs = _ensure_season_dim(obs, "obs")
+    session_duration = _ensure_season_dim(session_duration, "session_duration")
 
     if site_covs_names is None and site_covs is not None:
         site_covs_names = [str(0)] + [str(i + 1) for i in range(site_covs.shape[1])]
     if obs_covs_names is None and obs_covs is not None:
-        obs_covs_names = [str(0)] + [str(i + 1) for i in range(obs_covs.shape[2])]
+        obs_covs_names = [str(0)] + [str(i + 1) for i in range(obs_covs.shape[-1])]
 
     site_covs = jnp.array(site_covs) if site_covs is not None else None
     obs_covs = jnp.array(obs_covs) if obs_covs is not None else None

@@ -35,7 +35,9 @@ class LinearRegression(AbstractRegression):
         Parameters
         ----------
         covs : jnp.ndarray
-            Site covariate matrix of shape (n_covs, n_sites) or observation covariate matrix of shape (n_covs, n_revisits, n_sites).
+            Site covariate matrix of shape (n_covs, n_sites) or observation covariate
+            matrix of shape (n_covs, n_revisits, n_sites) or
+            (n_covs, n_replicates, n_periods, n_sites).
 
         Returns
         -------
@@ -50,9 +52,15 @@ class LinearRegression(AbstractRegression):
             return jnp.tile(self.coef[0], (covs.shape[1], covs.shape[2])) + jnp.sum(  # type: ignore
                 self.coef[1:, None, None] * covs, axis=0  # type: ignore
             )
+        elif covs.ndim == 4:
+            return jnp.tile(
+                self.coef[0], (covs.shape[1], covs.shape[2], covs.shape[3])  # type: ignore
+            ) + jnp.sum(
+                self.coef[1:, None, None, None] * covs, axis=0  # type: ignore
+            )
         else:
             raise ValueError(
-                f"Invalid covariate shape: {covs.shape}. Expected 2D or 3D array."
+                f"Invalid covariate shape: {covs.shape}. Expected 2D, 3D, or 4D array."
             )
 
 

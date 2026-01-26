@@ -45,7 +45,8 @@ def occu_rn(
     site_covs : jnp.ndarray
         An array of site-level covariates of shape (n_sites, n_site_covs).
     obs_covs : jnp.ndarray
-        An array of observation-level covariates of shape (n_sites, n_revisits, n_obs_covs).
+        An array of observation-level covariates of shape
+        (n_sites, n_periods, n_replicates, n_obs_covs).
     coords : jnp.ndarray, optional
         Coordinates for a spatial random effect when provided.
     ell : float
@@ -55,7 +56,7 @@ def occu_rn(
     max_abundance : int
         Maximum abundance cutoff for the Poisson distribution.
     obs : jnp.ndarray, optional
-        Observation matrix of shape (n_sites, n_revisits) or None.
+        Observation matrix of shape (n_sites, n_periods, n_replicates) or None.
     prior_beta : numpyro.distributions.Distribution
         Prior distribution for the site-level regression coefficients.
     prior_alpha : numpyro.distributions.Distribution
@@ -92,12 +93,15 @@ def occu_rn(
 
     # Check input data
     assert site_covs.ndim == 2, "site_covs must be (n_sites, n_site_covs)"
-    assert obs_covs.ndim == 3, "obs_covs must be (n_sites, time_periods, n_obs_covs)"
+    assert (
+        obs_covs.ndim == 4
+    ), "obs_covs must be (n_sites, n_periods, n_replicates, n_obs_covs)"
 
     n_sites = site_covs.shape[0]
-    time_periods = obs_covs.shape[1]
+    n_periods = obs_covs.shape[1]
+    n_replicates = obs_covs.shape[2]
     n_site_covs = site_covs.shape[1]
-    n_obs_covs = obs_covs.shape[2]
+    n_obs_covs = obs_covs.shape[3]
 
     # # TODO: re-enable
     # if obs is not None:
@@ -105,9 +109,9 @@ def occu_rn(
     #     assert (obs[np.isfinite(obs)] >= 0).all() and (obs[np.isfinite(obs)] <= 1).all(), "Detections (obs) must be in {0,1} (or NaN for missing)."
 
     # Mask observations where covariates are missing
-    obs_mask = jnp.isnan(obs_covs).any(axis=-1) | jnp.tile(
-        jnp.isnan(site_covs).any(axis=-1)[:, None], (1, time_periods)
-    )
+    obs_mask = jnp.isnan(obs_covs).any(axis=-1) | jnp.isnan(site_covs).any(axis=-1)[
+        :, None, None
+    ]
     obs = jnp.where(obs_mask, jnp.nan, obs) if obs is not None else None
     obs_covs = jnp.nan_to_num(obs_covs)
     site_covs = jnp.nan_to_num(site_covs)
@@ -142,8 +146,8 @@ def occu_rn(
 
     # Transpose in order to fit NumPyro's plate structure
     site_covs = site_covs.transpose((1, 0))
-    obs_covs = obs_covs.transpose((2, 1, 0))
-    obs = obs.transpose((1, 0)) if obs is not None else None
+    obs_covs = obs_covs.transpose((3, 2, 1, 0))
+    obs = obs.transpose((2, 1, 0)) if obs is not None else None
 
     with numpyro.plate("site", n_sites, dim=-1):
 
@@ -155,45 +159,49 @@ def occu_rn(
             site_re_abu = 0.0
             site_re_det = 0.0
 
-        # Abundance process (note: this model uses abundance instead of occupancy)
-        abundance = numpyro.deterministic(
-            "abundance",
-            jnp.exp(reg_abu(site_covs) + w + site_re_abu),
-        )
+        abu_linear = reg_abu(site_covs) + w + site_re_abu
 
-        N_i = numpyro.sample(
-            "N_i",
-            RightTruncatedPoisson(abundance, max_cutoff=max_abundance),  # type: ignore
-            infer={"enumerate": "parallel"},
-        )
+        with numpyro.plate("period", n_periods, dim=-2):
 
-        with numpyro.plate("time", time_periods, dim=-2):
+            # Abundance process (note: this model uses abundance instead of occupancy)
+            abundance = numpyro.deterministic("abundance", jnp.exp(abu_linear))
 
-            # Observation-level random effects
-            if obs_random_effects:
-                obs_re = numpyro.sample("obs_re", dist.Normal(0, obs_re_sd))  # type: ignore
-            else:
-                obs_re = 0.0
-
-            # Detection process
-            r_it = numpyro.deterministic(
-                f"prob_detection",
-                jax.nn.sigmoid(reg_det(obs_covs) + site_re_det + obs_re),
+            N_i = numpyro.sample(
+                "N_i",
+                RightTruncatedPoisson(abundance, max_cutoff=max_abundance),  # type: ignore
+                infer={"enumerate": "parallel"},
             )
-            p_it = 1.0 - (1.0 - r_it) ** N_i[None, :]  # type: ignore
 
-            with mask_missing_obs(obs):
-                numpyro.sample(
-                    "y",
-                    dist.Bernoulli(1 - (1 - p_it) * (1 - prob_fp_constant)),  # type: ignore
-                    obs=obs,
+            with numpyro.plate("replicate", n_replicates, dim=-3):
+
+                # Observation-level random effects
+                if obs_random_effects:
+                    obs_re = numpyro.sample("obs_re", dist.Normal(0, obs_re_sd))  # type: ignore
+                else:
+                    obs_re = 0.0
+
+                # Detection process
+                r_it = numpyro.deterministic(
+                    "prob_detection",
+                    jax.nn.sigmoid(reg_det(obs_covs) + site_re_det + obs_re),
                 )
+                p_it = 1.0 - (1.0 - r_it) ** N_i[None, :, :]  # type: ignore
+
+                with mask_missing_obs(obs):
+                    numpyro.sample(
+                        "y",
+                        dist.Bernoulli(
+                            1 - (1 - p_it) * (1 - prob_fp_constant)
+                        ),  # type: ignore
+                        obs=obs,
+                    )
 
 
 def simulate_rn(
     n_site_covs: int = 1,
     n_obs_covs: int = 1,
     n_sites: int = 100,
+    n_periods: int = 1,
     deployment_days_per_site: int = 365,
     session_duration: int = 7,
     prob_fp: float = 0.0,
@@ -259,19 +267,19 @@ def simulate_rn(
             + w
         )
         N_i = rng.poisson(
-            abundance, size=n_sites
-        )  # vector of latent occupancy status for each site
+            abundance, size=(n_periods, n_sites)
+        )  # matrix of latent abundance for each site and period
 
         # Generate detection data
-        time_periods = round(deployment_days_per_site / session_duration)
+        n_replicates = round(deployment_days_per_site / session_duration)
 
         # Create matrix of detection covariates
-        obs_covs = rng.normal(size=(n_sites, time_periods, n_obs_covs))
+        obs_covs = rng.normal(size=(n_sites, n_periods, n_replicates, n_obs_covs))
         r_it = 1 / (
             1
             + np.exp(
                 -(
-                    alpha[0].repeat(n_sites)[:, None]
+                    alpha[0]
                     + np.sum(
                         [alpha[i + 1] * obs_covs[..., i] for i in range(n_obs_covs)],
                         axis=0,
@@ -281,15 +289,15 @@ def simulate_rn(
         )
 
         # Create matrix of detections
-        obs = np.zeros((n_sites, time_periods))
+        obs = np.zeros((n_sites, n_periods, n_replicates))
 
         for i in range(n_sites):
             # According to the Royle model in unmarked, false positives are generated only if the site is unoccupied
             # Note this is different than how we think about false positives being a random occurrence per image.
             # For now, this is generating positive/negative per time period, which is different than per image.
-            p_it = 1.0 - (1.0 - r_it[i]) ** N_i[i]
-            obs[i, :] = rng.binomial(
-                n=1, p=1 - (1 - p_it) * (1 - prob_fp), size=time_periods
+            p_it = 1.0 - (1.0 - r_it[i, :, :]) ** N_i[:, i][:, None]
+            obs[i, :, :] = rng.binomial(
+                n=1, p=1 - (1 - p_it) * (1 - prob_fp), size=(n_periods, n_replicates)
             )
 
         # Convert counts into observed occupancy
@@ -361,6 +369,28 @@ class TestOccuRN(unittest.TestCase):
                 ],
                 true_params["alpha"],
                 atol=0.5,
+            )
+        )
+
+    def test_occu_multi_season(self):
+        data, true_params = simulate_rn(simulate_missing=True, n_periods=3)
+
+        from biolith.utils import fit
+
+        results = fit(
+            occu_rn,
+            **data,
+            num_chains=1,
+            num_samples=300,
+            num_warmup=300,
+            timeout=600,
+        )
+
+        self.assertTrue(
+            np.allclose(
+                results.samples["abundance"].mean(),
+                true_params["abundance"].mean(),
+                rtol=0.2,
             )
         )
 

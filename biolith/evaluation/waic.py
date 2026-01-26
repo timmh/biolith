@@ -61,12 +61,12 @@ def waic(
     valid_obs = (
         jnp.isfinite(kwargs["obs"])
         & jnp.isfinite(kwargs["obs_covs"]).all(axis=-1)
-        & jnp.isfinite(kwargs["site_covs"]).all(axis=-1)[:, None]
+        & jnp.isfinite(kwargs["site_covs"]).all(axis=-1)[:, None, None]
     )
 
     # Get log likelihood: shape (n_samples, n_visits, n_sites) - match LPPD implementation
     log_lik = log_likelihood(model_fn, posterior_samples, **kwargs)["y"].transpose(
-        (0, 2, 1)
+        (0, 3, 2, 1)
     )
 
     # Calculate lppd for each valid observation - same as LPPD implementation
@@ -114,7 +114,7 @@ def waic_manual(
     valid_obs = (
         jnp.isfinite(data["obs"])
         & jnp.isfinite(data["obs_covs"]).all(axis=-1)
-        & jnp.isfinite(data["site_covs"]).all(axis=-1)[:, None]
+        & jnp.isfinite(data["site_covs"]).all(axis=-1)[:, None, None]
     )
 
     # Get manual log likelihood: shape (n_samples, n_sites, n_visits)

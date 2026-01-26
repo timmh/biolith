@@ -100,23 +100,32 @@ class BARTRegression(AbstractRegression):
         Parameters
         ----------
         covs : jnp.ndarray
-            Site covariate matrix of shape (n_covs, n_sites) or observation covariate matrix of shape (n_covs, n_revisits, n_sites).
+            Site covariate matrix of shape (n_covs, n_sites) or observation covariate
+            matrix of shape (n_covs, n_revisits, n_sites) or
+            (n_covs, n_replicates, n_periods, n_sites).
 
         Returns
         -------
         jnp.ndarray
             Predictor of shape (n_sites,) or of shape (n_revisits, n_sites).
         """
-        if covs.ndim not in [2, 3]:
+        if covs.ndim not in [2, 3, 4]:
             raise ValueError(
-                f"Invalid covariate shape: {covs.shape}. Expected 2D or 3D array."
+                f"Invalid covariate shape: {covs.shape}. Expected 2D, 3D, or 4D array."
             )
 
-        # change order of dimensions in covs to (n_sites, n_covs) or (n_sites, n_revisits, n_covs)
-        covs = covs.transpose((2, 1, 0)) if covs.ndim == 3 else covs.transpose((1, 0))
+        # change order of dimensions in covs to
+        # (n_sites, n_covs), (n_sites, n_revisits, n_covs), or
+        # (n_sites, n_periods, n_replicates, n_covs)
+        if covs.ndim == 4:
+            covs = covs.transpose((3, 2, 1, 0))
+        elif covs.ndim == 3:
+            covs = covs.transpose((2, 1, 0))
+        else:
+            covs = covs.transpose((1, 0))
 
         original_shape = covs.shape
-        covs_flat = covs.reshape(-1, original_shape[-1]) if covs.ndim == 3 else covs
+        covs_flat = covs.reshape(-1, original_shape[-1]) if covs.ndim >= 3 else covs
 
         if covs_flat.shape[-1] != self.n_covs:
             raise ValueError(
@@ -155,8 +164,14 @@ class BARTRegression(AbstractRegression):
         predictions_per_tree = jax.vmap(gather_leaf_values)(leaf_indices)
         final_prediction = self.k * jnp.sum(predictions_per_tree, axis=-1)
 
+        if covs.ndim == 4:
+            pred = final_prediction.reshape(
+                (original_shape[0], original_shape[1], original_shape[2])
+            )
+            return pred.transpose((2, 1, 0))
         if covs.ndim == 3:
-            return final_prediction.reshape((original_shape[1], original_shape[0]))
+            pred = final_prediction.reshape((original_shape[0], original_shape[1]))
+            return pred.transpose((1, 0))
         return final_prediction
 
     def compute_feature_importances(self) -> None:

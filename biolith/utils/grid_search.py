@@ -152,9 +152,9 @@ def grid_search_priors(
     site_covs : jnp.ndarray
         Site-level covariates of shape (n_sites, n_site_covs).
     obs_covs : jnp.ndarray
-        Observation-level covariates of shape (n_sites, n_visits, n_obs_covs).
+        Observation-level covariates of shape (n_sites, n_periods, n_replicates, n_obs_covs).
     obs : jnp.ndarray
-        Observed detection data of shape (n_sites, n_visits).
+        Observed detection data of shape (n_sites, n_periods, n_replicates).
     regressor_occ : Any
         Regression class for occupancy process (e.g., LinearRegression, MLPRegression, BARTRegression).
     regressor_det : Any
@@ -295,7 +295,7 @@ def grid_search_priors(
             )
 
     # Create stratification labels based on site detection history
-    site_detections = jnp.nansum(obs, axis=1) > 0  # True if site has ≥1 detection
+    site_detections = jnp.nansum(obs, axis=(1, 2)) > 0  # True if site has ≥1 detection
     stratify_labels = site_detections.astype(int)
 
     # Check if we have both occupied and unoccupied sites

@@ -59,16 +59,18 @@ class MLPRegression(AbstractRegression):
         Parameters
         ----------
         covs : jnp.ndarray
-            Site covariate matrix of shape (n_covs, n_sites) or observation covariate matrix of shape (n_covs, n_revisits, n_sites).
+            Site covariate matrix of shape (n_covs, n_sites) or observation covariate
+            matrix of shape (n_covs, n_revisits, n_sites) or
+            (n_covs, n_replicates, n_periods, n_sites).
 
         Returns
         -------
         jnp.ndarray
             Predictor of shape (n_sites,) or of shape (n_revisits, n_sites).
         """
-        if covs.ndim not in [2, 3]:
+        if covs.ndim not in [2, 3, 4]:
             raise ValueError(
-                f"Invalid covariate shape: {covs.shape}. Expected 2D or 3D array."
+                f"Invalid covariate shape: {covs.shape}. Expected 2D, 3D, or 4D array."
             )
         original_shape = covs.shape
         flattened = covs.reshape(original_shape[0], -1).T
