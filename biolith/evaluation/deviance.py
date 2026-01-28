@@ -1,7 +1,7 @@
-import unittest
 from typing import Callable, Dict
 
 import jax.numpy as jnp
+import pytest
 from jax.scipy.special import logsumexp
 
 from biolith.evaluation.log_likelihood import log_likelihood, log_likelihood_manual
@@ -54,11 +54,11 @@ def deviance(
 
     valid_obs = (
         jnp.isfinite(kwargs["obs"])
-        & jnp.isfinite(kwargs["obs_covs"]).all(axis=-1)
-        & jnp.isfinite(kwargs["site_covs"]).all(axis=-1)[:, None, None]
+        & jnp.isfinite(kwargs["obs_covs"]).all(axis=-1)[None, ...]
+        & jnp.isfinite(kwargs["site_covs"]).all(axis=-1)[None, :, None, None]
     )
     log_lik = log_likelihood(model_fn, posterior_samples, **kwargs)["y"].transpose(
-        (0, 3, 2, 1)
+        (0, 4, 3, 2, 1)
     )
 
     # Sum over all observations to get total log-likelihood for each sample
@@ -105,8 +105,8 @@ def deviance_manual(
 
     valid_obs = (
         jnp.isfinite(data["obs"])
-        & jnp.isfinite(data["obs_covs"]).all(axis=-1)
-        & jnp.isfinite(data["site_covs"]).all(axis=-1)[:, None, None]
+        & jnp.isfinite(data["obs_covs"]).all(axis=-1)[None, ...]
+        & jnp.isfinite(data["site_covs"]).all(axis=-1)[None, :, None, None]
     )
 
     log_lik_manual = log_likelihood_manual(posterior_samples, data)
@@ -128,27 +128,20 @@ def deviance_manual(
     return deviance_value
 
 
-class TestDeviance(unittest.TestCase):
+# TODO: Fix the disparity between the NumPyro and manual deviance calculation.
+@pytest.mark.skip(reason="Skipping failing deviance test for now.")
+def test_deviance():
+    from biolith.models import occu, simulate
+    from biolith.utils import fit, predict
 
-    # TODO: Fix the disparity between the NumPyro and manual deviance calculation.
-    @unittest.skip("Skipping failing deviance test for now.")
-    def test_deviance(self):
-        from biolith.models import occu, simulate
-        from biolith.utils import fit, predict
+    data, _ = simulate(simulate_missing=False)
+    results = fit(occu, **data)
+    posterior_samples = predict(occu, results.mcmc, **data)
 
-        data, _ = simulate(simulate_missing=False)
-        results = fit(occu, **data)
-        posterior_samples = predict(occu, results.mcmc, **data)
+    d = deviance(occu, posterior_samples, **data)
+    d_manual = deviance_manual(posterior_samples, data)
 
-        d = deviance(occu, posterior_samples, **data)
-        d_manual = deviance_manual(posterior_samples, data)
-
-        self.assertTrue(0 < d < jnp.inf, "Deviance should be positive and finite.")
-        self.assertTrue(
-            jnp.allclose(d, d_manual, rtol=1e-3),
-            "NumPyro deviance should match manually computed deviance.",
-        )
-
-
-if __name__ == "__main__":
-    unittest.main()
+    assert 0 < d < jnp.inf, "Deviance should be positive and finite."
+    assert jnp.allclose(d, d_manual, rtol=1e-3), (
+        "NumPyro deviance should match manually computed deviance."
+    )

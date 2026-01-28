@@ -1,4 +1,3 @@
-import unittest
 from typing import Optional, Type
 
 import jax
@@ -6,9 +5,10 @@ import jax.numpy as jnp
 import numpy as np
 import numpyro
 import numpyro.distributions as dist
+import pytest
 
 from biolith.regression import AbstractRegression, LinearRegression
-from biolith.utils.modeling import mask_missing_obs
+from biolith.utils.modeling import flatten_covariates, mask_missing_obs, reshape_predictions
 from biolith.utils.spatial import sample_spatial_effects, simulate_spatial_effects
 
 
@@ -20,6 +20,7 @@ def occu(
     false_positives_constant: bool = False,
     false_positives_unoccupied: bool = False,
     obs: Optional[jnp.ndarray] = None,
+    n_species: int = 1,
     prior_beta: dist.Distribution = dist.Normal(),
     prior_alpha: dist.Distribution = dist.Normal(),
     regressor_occ: Type[AbstractRegression] = LinearRegression,
@@ -57,7 +58,9 @@ def occu(
     false_positives_unoccupied : bool
         Flag indicating whether to model false positives in unoccupied sites.
     obs : jnp.ndarray, optional
-        Observation matrix of shape (n_sites, n_periods, n_replicates) or None.
+        Observation matrix of shape (n_species, n_sites, n_periods, n_replicates) or None.
+    n_species : int
+        Number of species. Used when ``obs`` is None.
     prior_beta : numpyro.distributions.Distribution
         Prior distribution for the site-level regression coefficients.
     prior_alpha : numpyro.distributions.Distribution
@@ -94,8 +97,8 @@ def occu(
 
     # Check input data
     assert (
-        obs is None or obs.ndim == 3
-    ), "obs must be None or of shape (n_sites, n_periods, n_replicates)"
+        obs is None or obs.ndim == 4
+    ), "obs must be None or of shape (n_species, n_sites, n_periods, n_replicates)"
     assert site_covs.ndim == 2, "site_covs must be of shape (n_sites, n_site_covs)"
     assert (
         obs_covs.ndim == 4
@@ -111,6 +114,8 @@ def occu(
     n_replicates = obs_covs.shape[2]
     n_site_covs = site_covs.shape[1]
     n_obs_covs = obs_covs.shape[3]
+    if obs is not None:
+        n_species = obs.shape[0]
 
     assert (
         n_sites == site_covs.shape[0] == obs_covs.shape[0]
@@ -119,15 +124,15 @@ def occu(
         n_periods == obs_covs.shape[1]
     ), "obs_covs must have the same number of periods as obs"
     if obs is not None:
-        assert n_sites == obs.shape[0], "obs must have n_sites rows"
-        assert n_periods == obs.shape[1], "obs must have n_periods columns"
-        assert n_replicates == obs.shape[2], "obs must have n_replicates columns"
+        assert n_sites == obs.shape[1], "obs must have n_sites rows"
+        assert n_periods == obs.shape[2], "obs must have n_periods columns"
+        assert n_replicates == obs.shape[3], "obs must have n_replicates columns"
 
     # Mask observations where covariates are missing
     obs_mask = jnp.isnan(obs_covs).any(axis=-1) | jnp.isnan(site_covs).any(axis=-1)[
         :, None, None
     ]
-    obs = jnp.where(obs_mask, jnp.nan, obs) if obs is not None else None
+    obs = jnp.where(obs_mask[None, ...], jnp.nan, obs) if obs is not None else None
     obs_covs = jnp.nan_to_num(obs_covs)
     site_covs = jnp.nan_to_num(site_covs)
 
@@ -145,10 +150,6 @@ def occu(
         if false_positives_unoccupied
         else 0
     )
-
-    # Occupancy and detection regression models
-    reg_occ = regressor_occ("beta", n_site_covs, prior=prior_beta)
-    reg_det = regressor_det("alpha", n_obs_covs, prior=prior_alpha)
 
     if coords is not None:
         w = sample_spatial_effects(
@@ -169,61 +170,78 @@ def occu(
     # Transpose in order to fit NumPyro's plate structure
     site_covs = site_covs.transpose((1, 0))
     obs_covs = obs_covs.transpose((3, 2, 1, 0))
-    obs = obs.transpose((2, 1, 0)) if obs is not None else None
+    obs = obs.transpose((3, 2, 1, 0)) if obs is not None else None
+    site_covs_flat, site_shape = flatten_covariates(site_covs)
+    obs_covs_flat, obs_shape = flatten_covariates(obs_covs)
 
-    with numpyro.plate("site", n_sites, dim=-1):
+    with numpyro.plate("species", n_species, dim=-1):
 
-        # Site-level random effects
-        if site_random_effects:
-            site_re_occ = numpyro.sample("site_re_occ", dist.Normal(0, site_re_sd))  # type: ignore
-            site_re_det = numpyro.sample("site_re_det", dist.Normal(0, site_re_sd))  # type: ignore
-        else:
-            site_re_occ = 0.0
-            site_re_det = 0.0
+        # Occupancy and detection regression models
+        reg_occ = regressor_occ("beta", n_site_covs, prior=prior_beta)
+        reg_det = regressor_det("alpha", n_obs_covs, prior=prior_alpha)
 
-        occ_linear = reg_occ(site_covs) + w + site_re_occ
+        with numpyro.plate("site", n_sites, dim=-2):
 
-        with numpyro.plate("period", n_periods, dim=-2):
+            # Site-level random effects
+            if site_random_effects:
+                site_re_occ = numpyro.sample("site_re_occ", dist.Normal(0, site_re_sd))  # type: ignore
+                site_re_det = numpyro.sample("site_re_det", dist.Normal(0, site_re_sd))  # type: ignore
+            else:
+                site_re_occ = 0.0
+                site_re_det = 0.0
 
-            # Occupancy process
-            psi = numpyro.deterministic("psi", jax.nn.sigmoid(occ_linear))
-            z = numpyro.sample(
-                "z", dist.Bernoulli(probs=psi), infer={"enumerate": "parallel"}  # type: ignore
+            occ_linear = (
+                reshape_predictions(reg_occ(site_covs_flat), site_shape)
+                + w[:, None]
+                + site_re_occ
             )
 
-            with numpyro.plate("replicate", n_replicates, dim=-3):
+            with numpyro.plate("period", n_periods, dim=-3):
 
-                # Observation-level random effects
-                if obs_random_effects:
-                    obs_re = numpyro.sample("obs_re", dist.Normal(0, obs_re_sd))  # type: ignore
-                else:
-                    obs_re = 0.0
-
-                # Detection process
-                prob_detection = numpyro.deterministic(
-                    "prob_detection",
-                    jax.nn.sigmoid(reg_det(obs_covs) + site_re_det + obs_re),
-                )
-                prob_detection_fp = numpyro.deterministic(
-                    "prob_detection_fp",
-                    1
-                    - (1 - z * prob_detection)
-                    * (1 - prob_fp_constant)
-                    * (1 - (1 - z) * prob_fp_unoccupied),
+                # Occupancy process
+                psi = numpyro.deterministic("psi", jax.nn.sigmoid(occ_linear))
+                z = numpyro.sample(
+                    "z", dist.Bernoulli(probs=psi), infer={"enumerate": "parallel"}  # type: ignore
                 )
 
-                with mask_missing_obs(obs):
-                    numpyro.sample(
-                        "y",
-                        dist.Bernoulli(prob_detection_fp),  # type: ignore
-                        obs=obs,
+                with numpyro.plate("replicate", n_replicates, dim=-4):
+
+                    # Observation-level random effects
+                    if obs_random_effects:
+                        obs_re = numpyro.sample("obs_re", dist.Normal(0, obs_re_sd))  # type: ignore
+                    else:
+                        obs_re = 0.0
+
+                    # Detection process
+                    prob_detection = numpyro.deterministic(
+                        "prob_detection",
+                        jax.nn.sigmoid(
+                            reshape_predictions(reg_det(obs_covs_flat), obs_shape)
+                            + site_re_det
+                            + obs_re
+                        ),
                     )
+                    prob_detection_fp = numpyro.deterministic(
+                        "prob_detection_fp",
+                        1
+                        - (1 - z * prob_detection)
+                        * (1 - prob_fp_constant)
+                        * (1 - (1 - z) * prob_fp_unoccupied),
+                    )
+
+                    with mask_missing_obs(obs):
+                        numpyro.sample(
+                            "y",
+                            dist.Bernoulli(prob_detection_fp),  # type: ignore
+                            obs=obs,
+                        )
 
 
 def simulate(
     n_site_covs: int = 1,
     n_obs_covs: int = 1,
     n_sites: int = 100,
+    n_species: int = 1,
     n_periods: int = 1,
     deployment_days_per_site: int = 365,
     session_duration: int = 7,
@@ -274,10 +292,10 @@ def simulate(
 
         # Generate intercept and slopes
         beta = rng.normal(
-            size=n_site_covs + 1
+            size=(n_species, n_site_covs + 1)
         )  # intercept and slopes for occupancy logistic regression
         alpha = rng.normal(
-            size=n_obs_covs + 1
+            size=(n_species, n_obs_covs + 1)
         )  # intercept and slopes for detection logistic regression
 
         # Generate occupancy and site-level covariates
@@ -289,28 +307,25 @@ def simulate(
 
         # Generate random effects
         if site_random_effects:
-            site_re_occ = rng.normal(0, site_re_sd, size=n_sites)
-            site_re_det = rng.normal(0, site_re_sd, size=n_sites)
+            site_re_occ = rng.normal(0, site_re_sd, size=(n_species, n_sites))
+            site_re_det = rng.normal(0, site_re_sd, size=(n_species, n_sites))
         else:
-            site_re_occ = np.zeros(n_sites)
-            site_re_det = np.zeros(n_sites)
+            site_re_occ = np.zeros((n_species, n_sites))
+            site_re_det = np.zeros((n_species, n_sites))
         psi = 1 / (
             1
             + np.exp(
                 -(
-                    beta[0].repeat(n_sites)
-                    + np.sum(
-                        [beta[i + 1] * site_covs[..., i] for i in range(n_site_covs)],
-                        axis=0,
-                    )
-                    + w
+                    beta[:, 0][:, None]
+                    + np.tensordot(beta[:, 1:], site_covs, axes=([1], [1]))
+                    + w[None, :]
                     + site_re_occ
                 )
             )
         )
         z = rng.binomial(
-            n=1, p=psi, size=(n_periods, n_sites)
-        )  # matrix of latent occupancy status for each site and period
+            n=1, p=psi[:, None, :], size=(n_species, n_periods, n_sites)
+        )  # matrix of latent occupancy status for each species, period, and site
 
         # Generate detection data
         n_replicates = round(deployment_days_per_site / session_duration)
@@ -320,42 +335,40 @@ def simulate(
 
         # Generate observation-level random effects
         if obs_random_effects:
-            obs_re = rng.normal(0, obs_re_sd, size=(n_sites, n_periods, n_replicates))
+            obs_re = rng.normal(
+                0, obs_re_sd, size=(n_species, n_sites, n_periods, n_replicates)
+            )
         else:
-            obs_re = np.zeros((n_sites, n_periods, n_replicates))
+            obs_re = np.zeros((n_species, n_sites, n_periods, n_replicates))
 
         prob_detection = 1 / (
             1
             + np.exp(
                 -(
-                    alpha[0]
-                    + np.sum(
-                        [alpha[i + 1] * obs_covs[..., i] for i in range(n_obs_covs)],
-                        axis=0,
-                    )
-                    + site_re_det[:, None, None]
+                    alpha[:, 0][:, None, None, None]
+                    + np.tensordot(alpha[:, 1:], obs_covs, axes=([1], [3]))
+                    + site_re_det[:, :, None, None]
                     + obs_re
                 )
             )
         )
 
         # Create matrix of detections
-        obs = np.zeros((n_sites, n_periods, n_replicates))
-        prob_detection_fp = np.zeros((n_sites, n_periods, n_replicates))
+        obs = np.zeros((n_species, n_sites, n_periods, n_replicates))
+        prob_detection_fp = np.zeros((n_species, n_sites, n_periods, n_replicates))
 
-        for i in range(n_sites):
-            # According to the Royle model in unmarked, false positives are generated only if the site is unoccupied
-            # Note this is different than how we think about false positives being a random occurrence per image.
-            # For now, this is generating positive/negative per time period, which is different than per image.
-            prob_detection_fp[i, :, :] = (
-                1
-                - (1 - (z[:, i][:, None] * prob_detection[i, :, :]))
-                * (1 - prob_fp_constant)
-                * (1 - ((1 - z[:, i][:, None]) * prob_fp_unoccupied))
-            )
-            obs[i, :, :] = rng.binomial(
-                n=1, p=prob_detection_fp[i, :, :], size=(n_periods, n_replicates)
-            )
+        z_site = z.transpose(0, 2, 1)
+        prob_detection_fp = (
+            1
+            - (1 - (z_site[..., None] * prob_detection))
+            * (1 - prob_fp_constant)
+            * (1 - ((1 - z_site[..., None]) * prob_fp_unoccupied))
+        )
+        obs = rng.binomial(
+            n=1,
+            p=prob_detection_fp,
+            size=(n_species, n_sites, n_periods, n_replicates),
+        )
 
         # Convert counts into observed occupancy
         obs = (obs >= 1) * 1.0
@@ -415,472 +428,508 @@ def simulate(
     )
 
 
-class TestOccu(unittest.TestCase):
 
-    def test_occu(self):
-        data, true_params = simulate(simulate_missing=True)
+def test_occu():
+    data, true_params = simulate(simulate_missing=True)
 
-        from biolith.utils import fit
+    from biolith.utils import fit
 
-        results = fit(occu, **data, timeout=600)
+    results = fit(occu, **data, timeout=600)
 
-        self.assertTrue(
+    assert (
+        np.allclose(
+            results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1
+        )
+    )
+    assert (
+        np.allclose(
+            [
+                results.samples[k].mean()
+                for k in [
+                    f"cov_state_{i}"
+                    for i in range(true_params["beta"].shape[1])
+                ]
+            ],
+            true_params["beta"].mean(axis=0),
+            atol=0.5,
+        )
+    )
+    assert (
+        np.allclose(
+            [
+                results.samples[k].mean()
+                for k in [
+                    f"cov_det_{i}"
+                    for i in range(true_params["alpha"].shape[1])
+                ]
+            ],
+            true_params["alpha"].mean(axis=0),
+            atol=0.5,
+        )
+    )
+
+def test_occu_multi_season():
+    data, true_params = simulate(simulate_missing=True, n_periods=3)
+
+    from biolith.utils import fit
+
+    results = fit(
+        occu,
+        **data,
+        num_chains=1,
+        num_samples=300,
+        num_warmup=300,
+        timeout=600,
+    )
+
+    assert (
+        np.allclose(
+            results.samples["psi"].mean(), true_params["z"].mean(), atol=0.15
+        )
+    )
+
+def test_occu_multi_species():
+    data, _ = simulate(simulate_missing=True, n_species=2, n_sites=30)
+
+    from biolith.utils import fit
+
+    results = fit(
+        occu,
+        **data,
+        num_chains=1,
+        num_samples=100,
+        num_warmup=100,
+        timeout=600,
+    )
+
+    assert results.samples["psi"].shape[-1] == 2
+
+def test_occu_fp_constant():
+    prob_fp_constant = 0.1
+    data, true_params = simulate(
+        simulate_missing=True, prob_fp_constant=prob_fp_constant
+    )
+
+    from biolith.utils import fit
+
+    results = fit(occu, **data, false_positives_constant=True, timeout=600)
+
+    assert (
+        np.allclose(
+            results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1
+        )
+    )
+    assert (
+        np.allclose(
+            results.samples["prob_fp_constant"].mean(), prob_fp_constant, atol=0.1
+        )
+    )
+    assert (
+        np.allclose(
+            [
+                results.samples[k].mean()
+                for k in [
+                    f"cov_state_{i}"
+                    for i in range(true_params["beta"].shape[1])
+                ]
+            ],
+            true_params["beta"].mean(axis=0),
+            atol=0.5,
+        )
+    )
+    assert (
+        np.allclose(
+            [
+                results.samples[k].mean()
+                for k in [
+                    f"cov_det_{i}"
+                    for i in range(true_params["alpha"].shape[1])
+                ]
+            ],
+            true_params["alpha"].mean(axis=0),
+            atol=0.5,
+        )
+    )
+
+# TODO: fix this test
+@pytest.mark.skip(reason="Skipping test for false positives at unoccupied sites")
+def test_occu_fp_unoccupied():
+    prob_fp_unoccupied = 0.1
+    data, true_params = simulate(
+        simulate_missing=True, prob_fp_unoccupied=prob_fp_unoccupied
+    )
+
+    from biolith.utils import fit
+
+    results = fit(occu, **data, false_positives_unoccupied=True, timeout=600)
+
+    assert (
+        np.allclose(
+            results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1
+        )
+    )
+    assert (
+        np.allclose(
+            results.samples["prob_fp_unoccupied"].mean(),
+            prob_fp_unoccupied,
+            atol=0.1,
+        )
+    )
+    assert (
+        np.allclose(
+            [
+                results.samples[k].mean()
+                for k in [
+                    f"cov_state_{i}"
+                    for i in range(true_params["beta"].shape[1])
+                ]
+            ],
+            true_params["beta"].mean(axis=0),
+            atol=0.5,
+        )
+    )
+    assert (
+        np.allclose(
+            [
+                results.samples[k].mean()
+                for k in [
+                    f"cov_det_{i}"
+                    for i in range(true_params["alpha"].shape[1])
+                ]
+            ],
+            true_params["alpha"].mean(axis=0),
+            atol=0.5,
+        )
+    )
+
+def test_occu_spatial():
+    data, true_params = simulate(simulate_missing=True, spatial=True)
+
+    from biolith.utils import fit
+
+    results = fit(occu, **data, timeout=600)
+
+    assert (
+        np.allclose(
+            results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1
+        )
+    )
+    assert (
+        np.allclose(results.samples["gp_sd"].mean(), true_params["gp_sd"], atol=1.0)
+    )
+    assert (
+        np.allclose(results.samples["gp_l"].mean(), true_params["gp_l"], atol=0.5)
+    )
+
+def test_vs_spoccupancy():
+    data, true_params = simulate(simulate_missing=True)
+
+    num_samples = 1000
+
+    # fit the biolith model
+    try:
+        from rpy2.robjects.packages import importr
+    except ImportError:
+        pytest.skip("rpy2 is not installed.")
+
+    from biolith.utils import fit
+
+    results = fit(
+        occu,
+        **data,
+        timeout=600,
+        num_chains=1,
+        num_samples=num_samples,
+        num_warmup=100,
+    )
+
+    # fit the spOccupancy model
+    import rpy2.robjects as ro
+    import rpy2.robjects.numpy2ri as numpy2ri_module
+
+    # Import R packages
+    base_r = importr("base")
+    stats_r = importr("stats")
+    spOccupancy_r = importr("spOccupancy")
+
+    # Prepare data for R
+    # Observations (y) - can have NaNs, spOccupancy handles them.
+    y_py = data["obs"][:, 0, :].copy()  # Shape: (n_sites, time_periods)
+    y_r = numpy2ri_module.py2rpy(y_py)  # Converts to R matrix, np.nan to R NA
+
+    # Occupancy covariates (site-level)
+    # Replace NaNs with 0, as spOccupancy expects complete covariate data.
+    occ_covs_py = np.nan_to_num(
+        data["site_covs"].copy()
+    )  # Shape: (n_sites, n_site_covs)
+    n_sites, n_site_covs = occ_covs_py.shape
+
+    occ_covs_r_elements = {}
+    occ_formula_parts = []
+    if n_site_covs > 0:
+        for i in range(n_site_covs):
+            cov_name = f"site_cov{i+1}"
+            occ_covs_r_elements[cov_name] = numpy2ri_module.py2rpy(
+                occ_covs_py[:, i]
+            )
+            occ_formula_parts.append(cov_name)
+    occ_covs_r_df = ro.DataFrame(occ_covs_r_elements)  # R DataFrame
+    occ_formula_str = (
+        "~ " + " + ".join(occ_formula_parts) if occ_formula_parts else "~ 1"
+    )
+
+    # Detection covariates (observation-level)
+    # Replace NaNs with 0.
+    det_covs_py = np.nan_to_num(
+        data["obs_covs"][:, 0, :, :].copy()
+    )  # Shape: (n_sites, time_periods, n_obs_covs)
+    _, time_periods, n_obs_covs = det_covs_py.shape
+
+    det_covs_r_elements = {}  # For the R named list
+    det_formula_parts = []
+    if n_obs_covs > 0:
+        for i in range(n_obs_covs):
+            cov_name = f"obs_cov{i+1}"
+            # Convert each (n_sites, time_periods) slice to an R matrix
+            det_covs_r_elements[cov_name] = numpy2ri_module.py2rpy(
+                det_covs_py[:, :, i]
+            )
+            det_formula_parts.append(cov_name)
+    det_covs_r_list = ro.ListVector(det_covs_r_elements)  # R named list
+    det_formula_str = (
+        "~ " + " + ".join(det_formula_parts) if det_formula_parts else "~ 1"
+    )
+
+    # Consolidate data into an R list for spOccupancy
+    sp_data_r = ro.ListVector(
+        {"y": y_r, "occ.covs": occ_covs_r_df, "det.covs": det_covs_r_list}
+    )
+
+    # Priors: Normal(0,1) for regression coefficients to match biolith's default
+    n_beta_params = n_site_covs + 1  # site covariates + intercept
+    n_alpha_params = n_obs_covs + 1  # observation covariates + intercept
+
+    priors_list_r = ro.ListVector(
+        {
+            "beta.normal": ro.ListVector(
+                {
+                    "mean": base_r.rep(0, n_beta_params),
+                    "var": base_r.rep(1, n_beta_params),
+                }
+            ),
+            "alpha.normal": ro.ListVector(
+                {
+                    "mean": base_r.rep(0, n_alpha_params),
+                    "var": base_r.rep(1, n_alpha_params),
+                }
+            ),
+        }
+    )
+
+    pg_occ_results_r = spOccupancy_r.PGOcc(
+        occ_formula=stats_r.as_formula(occ_formula_str),
+        det_formula=stats_r.as_formula(det_formula_str),
+        data=sp_data_r,
+        priors=priors_list_r,
+        n_samples=num_samples,
+    )
+
+    beta_samples_r_matrix = numpy2ri_module.rpy2py(
+        pg_occ_results_r.rx2("beta.samples")
+    )
+    alpha_samples_r_matrix = numpy2ri_module.rpy2py(
+        pg_occ_results_r.rx2("alpha.samples")
+    )
+    psi_samples_r_matrix = numpy2ri_module.rpy2py(
+        pg_occ_results_r.rx2("psi.samples")
+    )
+
+    assert (
+        np.allclose(
+            psi_samples_r_matrix.mean(), results.samples["psi"].mean(), atol=0.1
+        )
+    )
+    assert (
+        np.allclose(
+            beta_samples_r_matrix.mean(axis=0),
+            [
+                results.samples[k].mean()
+                for k in [
+                    f"cov_state_{i}"
+                    for i in range(true_params["beta"].shape[1])
+                ]
+            ],
+            atol=0.5,
+        )
+    )
+    assert (
+        np.allclose(
+            alpha_samples_r_matrix.mean(axis=0),
+            [
+                results.samples[k].mean()
+                for k in [
+                    f"cov_det_{i}"
+                    for i in range(true_params["alpha"].shape[1])
+                ]
+            ],
+            atol=0.5,
+        )
+    )
+
+def test_evaluation():
+    data, _ = simulate(simulate_missing=True)
+
+    from biolith.utils import fit, predict
+
+    results = fit(occu, **data, timeout=600)
+    posterior_samples = predict(occu, results.mcmc, **data)
+
+    from biolith.evaluation import (
+        deviance,
+        diagnostics,
+        lppd,
+        posterior_predictive_check,
+        residuals,
+    )
+
+    # Test log pointwise predictive density (lppd)
+    lppd(occu, posterior_samples, **data)
+
+    # Test posterior predictive checks
+    for group_by in ["site", "revisit"]:
+        for statistic in ["freeman-tukey", "chi-squared"]:
+            posterior_predictive_check(
+                posterior_samples,
+                data["obs"],
+                group_by=group_by,  # type: ignore
+                statistic=statistic,  # type: ignore
+            )
+
+    # Test residuals
+    residuals(posterior_samples, data["obs"])
+
+    # Test deviance
+    deviance(occu, posterior_samples, **data)
+
+    # Test diagnostics
+    diagnostics(results.mcmc)
+
+def test_regression_methods():
+    from biolith.regression import (
+        BARTRegression,
+        LinearRegression,
+        MLPRegression,
+    )
+    from biolith.utils import fit
+
+    data, true_params = simulate(simulate_missing=True)
+
+    for reg_class in [LinearRegression, MLPRegression, BARTRegression]:
+        results = fit(
+            occu, **data, regressor_occ=reg_class, num_chains=1, timeout=600
+        )
+        assert (
             np.allclose(
                 results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1
             )
         )
-        self.assertTrue(
-            np.allclose(
-                [
-                    results.samples[k].mean()
-                    for k in [f"cov_state_{i}" for i in range(len(true_params["beta"]))]
-                ],
-                true_params["beta"],
-                atol=0.5,
-            )
+
+def test_site_random_effects():
+
+    data, true_params = simulate(
+        site_random_effects=True,
+        obs_random_effects=False,
+        deployment_days_per_site=7000,  # to ensure enough data for random effects
+    )
+
+    from biolith.evaluation import lppd
+    from biolith.utils import fit, predict
+
+    results = fit(
+        occu,
+        **data,
+        num_chains=1,
+        num_samples=500,
+        timeout=600,
+    )
+    posterior_samples = predict(occu, results.mcmc, **data)
+    l = lppd(occu, posterior_samples, **data)
+
+    results_re = fit(
+        occu,
+        **data,
+        site_random_effects=True,
+        obs_random_effects=False,
+        num_chains=1,
+        num_samples=500,
+        timeout=600,
+    )
+    posterior_samples_re = predict(
+        occu,
+        results_re.mcmc,
+        **data,
+        site_random_effects=True,
+        obs_random_effects=False,
+    )
+    l_re = lppd(occu, posterior_samples_re, **data)
+
+    assert (l_re >= 0.95 * l)
+    assert ("site_re_sd" in results_re.samples)
+    assert ("site_re_occ" in results_re.samples)
+    assert ("site_re_det" in results_re.samples)
+    assert (results_re.samples["site_re_sd"].mean() > 0)
+    assert (
+        np.allclose(
+            results_re.samples["psi"].mean(), true_params["z"].mean(), atol=0.15
         )
-        self.assertTrue(
-            np.allclose(
-                [
-                    results.samples[k].mean()
-                    for k in [f"cov_det_{i}" for i in range(len(true_params["alpha"]))]
-                ],
-                true_params["alpha"],
-                atol=0.5,
-            )
+    )
+
+def test_obs_random_effects():
+    data, true_params = simulate(simulate_missing=True)
+
+    from biolith.utils import fit
+
+    results = fit(
+        occu,
+        **data,
+        obs_random_effects=True,
+        num_chains=1,
+        num_samples=500,
+        timeout=600,
+    )
+
+    assert ("obs_re_sd" in results.samples)
+    assert ("obs_re" in results.samples)
+    assert (results.samples["obs_re_sd"].mean() > 0)
+    assert (
+        np.allclose(
+            results.samples["psi"].mean(), true_params["z"].mean(), atol=0.15
         )
+    )
 
-    def test_occu_multi_season(self):
-        data, true_params = simulate(simulate_missing=True, n_periods=3)
+def test_combined_random_effects():
+    data, true_params = simulate(simulate_missing=True)
 
-        from biolith.utils import fit
+    from biolith.utils import fit
 
-        results = fit(
-            occu,
-            **data,
-            num_chains=1,
-            num_samples=300,
-            num_warmup=300,
-            timeout=600,
+    results = fit(
+        occu,
+        **data,
+        site_random_effects=True,
+        obs_random_effects=True,
+        num_chains=1,
+        num_samples=500,
+        timeout=600,
+    )
+
+    assert ("site_re_sd" in results.samples)
+    assert ("site_re_occ" in results.samples)
+    assert ("site_re_det" in results.samples)
+    assert ("obs_re_sd" in results.samples)
+    assert ("obs_re" in results.samples)
+    assert (
+        np.allclose(
+            results.samples["psi"].mean(), true_params["z"].mean(), atol=0.15
         )
+    )
 
-        self.assertTrue(
-            np.allclose(
-                results.samples["psi"].mean(), true_params["z"].mean(), atol=0.15
-            )
-        )
-
-    def test_occu_fp_constant(self):
-        prob_fp_constant = 0.1
-        data, true_params = simulate(
-            simulate_missing=True, prob_fp_constant=prob_fp_constant
-        )
-
-        from biolith.utils import fit
-
-        results = fit(occu, **data, false_positives_constant=True, timeout=600)
-
-        self.assertTrue(
-            np.allclose(
-                results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1
-            )
-        )
-        self.assertTrue(
-            np.allclose(
-                results.samples["prob_fp_constant"].mean(), prob_fp_constant, atol=0.1
-            )
-        )
-        self.assertTrue(
-            np.allclose(
-                [
-                    results.samples[k].mean()
-                    for k in [f"cov_state_{i}" for i in range(len(true_params["beta"]))]
-                ],
-                true_params["beta"],
-                atol=0.5,
-            )
-        )
-        self.assertTrue(
-            np.allclose(
-                [
-                    results.samples[k].mean()
-                    for k in [f"cov_det_{i}" for i in range(len(true_params["alpha"]))]
-                ],
-                true_params["alpha"],
-                atol=0.5,
-            )
-        )
-
-    # TODO: fix this test
-    @unittest.skip("Skipping test for false positives at unoccupied sites")
-    def test_occu_fp_unoccupied(self):
-        prob_fp_unoccupied = 0.1
-        data, true_params = simulate(
-            simulate_missing=True, prob_fp_unoccupied=prob_fp_unoccupied
-        )
-
-        from biolith.utils import fit
-
-        results = fit(occu, **data, false_positives_unoccupied=True, timeout=600)
-
-        self.assertTrue(
-            np.allclose(
-                results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1
-            )
-        )
-        self.assertTrue(
-            np.allclose(
-                results.samples["prob_fp_unoccupied"].mean(),
-                prob_fp_unoccupied,
-                atol=0.1,
-            )
-        )
-        self.assertTrue(
-            np.allclose(
-                [
-                    results.samples[k].mean()
-                    for k in [f"cov_state_{i}" for i in range(len(true_params["beta"]))]
-                ],
-                true_params["beta"],
-                atol=0.5,
-            )
-        )
-        self.assertTrue(
-            np.allclose(
-                [
-                    results.samples[k].mean()
-                    for k in [f"cov_det_{i}" for i in range(len(true_params["alpha"]))]
-                ],
-                true_params["alpha"],
-                atol=0.5,
-            )
-        )
-
-    def test_occu_spatial(self):
-        data, true_params = simulate(simulate_missing=True, spatial=True)
-
-        from biolith.utils import fit
-
-        results = fit(occu, **data, timeout=600)
-
-        self.assertTrue(
-            np.allclose(
-                results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1
-            )
-        )
-        self.assertTrue(
-            np.allclose(results.samples["gp_sd"].mean(), true_params["gp_sd"], atol=1.0)
-        )
-        self.assertTrue(
-            np.allclose(results.samples["gp_l"].mean(), true_params["gp_l"], atol=0.5)
-        )
-
-    def test_vs_spoccupancy(self):
-        data, true_params = simulate(simulate_missing=True)
-
-        num_samples = 1000
-
-        # fit the biolith model
-        try:
-            from rpy2.robjects.packages import importr
-        except ImportError:
-            self.skipTest("rpy2 is not installed.")
-
-        from biolith.utils import fit
-
-        results = fit(
-            occu,
-            **data,
-            timeout=600,
-            num_chains=1,
-            num_samples=num_samples,
-            num_warmup=100,
-        )
-
-        # fit the spOccupancy model
-        import rpy2.robjects as ro
-        import rpy2.robjects.numpy2ri as numpy2ri_module
-
-        # Import R packages
-        base_r = importr("base")
-        stats_r = importr("stats")
-        spOccupancy_r = importr("spOccupancy")
-
-        # Prepare data for R
-        # Observations (y) - can have NaNs, spOccupancy handles them.
-        y_py = data["obs"][:, 0, :].copy()  # Shape: (n_sites, time_periods)
-        y_r = numpy2ri_module.py2rpy(y_py)  # Converts to R matrix, np.nan to R NA
-
-        # Occupancy covariates (site-level)
-        # Replace NaNs with 0, as spOccupancy expects complete covariate data.
-        occ_covs_py = np.nan_to_num(
-            data["site_covs"].copy()
-        )  # Shape: (n_sites, n_site_covs)
-        n_sites, n_site_covs = occ_covs_py.shape
-
-        occ_covs_r_elements = {}
-        occ_formula_parts = []
-        if n_site_covs > 0:
-            for i in range(n_site_covs):
-                cov_name = f"site_cov{i+1}"
-                occ_covs_r_elements[cov_name] = numpy2ri_module.py2rpy(
-                    occ_covs_py[:, i]
-                )
-                occ_formula_parts.append(cov_name)
-        occ_covs_r_df = ro.DataFrame(occ_covs_r_elements)  # R DataFrame
-        occ_formula_str = (
-            "~ " + " + ".join(occ_formula_parts) if occ_formula_parts else "~ 1"
-        )
-
-        # Detection covariates (observation-level)
-        # Replace NaNs with 0.
-        det_covs_py = np.nan_to_num(
-            data["obs_covs"][:, 0, :, :].copy()
-        )  # Shape: (n_sites, time_periods, n_obs_covs)
-        _, time_periods, n_obs_covs = det_covs_py.shape
-
-        det_covs_r_elements = {}  # For the R named list
-        det_formula_parts = []
-        if n_obs_covs > 0:
-            for i in range(n_obs_covs):
-                cov_name = f"obs_cov{i+1}"
-                # Convert each (n_sites, time_periods) slice to an R matrix
-                det_covs_r_elements[cov_name] = numpy2ri_module.py2rpy(
-                    det_covs_py[:, :, i]
-                )
-                det_formula_parts.append(cov_name)
-        det_covs_r_list = ro.ListVector(det_covs_r_elements)  # R named list
-        det_formula_str = (
-            "~ " + " + ".join(det_formula_parts) if det_formula_parts else "~ 1"
-        )
-
-        # Consolidate data into an R list for spOccupancy
-        sp_data_r = ro.ListVector(
-            {"y": y_r, "occ.covs": occ_covs_r_df, "det.covs": det_covs_r_list}
-        )
-
-        # Priors: Normal(0,1) for regression coefficients to match biolith's default
-        n_beta_params = n_site_covs + 1  # site covariates + intercept
-        n_alpha_params = n_obs_covs + 1  # observation covariates + intercept
-
-        priors_list_r = ro.ListVector(
-            {
-                "beta.normal": ro.ListVector(
-                    {
-                        "mean": base_r.rep(0, n_beta_params),
-                        "var": base_r.rep(1, n_beta_params),
-                    }
-                ),
-                "alpha.normal": ro.ListVector(
-                    {
-                        "mean": base_r.rep(0, n_alpha_params),
-                        "var": base_r.rep(1, n_alpha_params),
-                    }
-                ),
-            }
-        )
-
-        pg_occ_results_r = spOccupancy_r.PGOcc(
-            occ_formula=stats_r.as_formula(occ_formula_str),
-            det_formula=stats_r.as_formula(det_formula_str),
-            data=sp_data_r,
-            priors=priors_list_r,
-            n_samples=num_samples,
-        )
-
-        beta_samples_r_matrix = numpy2ri_module.rpy2py(
-            pg_occ_results_r.rx2("beta.samples")
-        )
-        alpha_samples_r_matrix = numpy2ri_module.rpy2py(
-            pg_occ_results_r.rx2("alpha.samples")
-        )
-        psi_samples_r_matrix = numpy2ri_module.rpy2py(
-            pg_occ_results_r.rx2("psi.samples")
-        )
-
-        self.assertTrue(
-            np.allclose(
-                psi_samples_r_matrix.mean(), results.samples["psi"].mean(), atol=0.1
-            )
-        )
-        self.assertTrue(
-            np.allclose(
-                beta_samples_r_matrix.mean(axis=0),
-                [
-                    results.samples[k].mean()
-                    for k in [f"cov_state_{i}" for i in range(len(true_params["beta"]))]
-                ],
-                atol=0.5,
-            )
-        )
-        self.assertTrue(
-            np.allclose(
-                alpha_samples_r_matrix.mean(axis=0),
-                [
-                    results.samples[k].mean()
-                    for k in [f"cov_det_{i}" for i in range(len(true_params["alpha"]))]
-                ],
-                atol=0.5,
-            )
-        )
-
-    def test_evaluation(self):
-        data, _ = simulate(simulate_missing=True)
-
-        from biolith.utils import fit, predict
-
-        results = fit(occu, **data, timeout=600)
-        posterior_samples = predict(occu, results.mcmc, **data)
-
-        from biolith.evaluation import (
-            deviance,
-            diagnostics,
-            lppd,
-            posterior_predictive_check,
-            residuals,
-        )
-
-        # Test log pointwise predictive density (lppd)
-        lppd(occu, posterior_samples, **data)
-
-        # Test posterior predictive checks
-        for group_by in ["site", "revisit"]:
-            for statistic in ["freeman-tukey", "chi-squared"]:
-                posterior_predictive_check(
-                    posterior_samples,
-                    data["obs"],
-                    group_by=group_by,  # type: ignore
-                    statistic=statistic,  # type: ignore
-                )
-
-        # Test residuals
-        residuals(posterior_samples, data["obs"])
-
-        # Test deviance
-        deviance(occu, posterior_samples, **data)
-
-        # Test diagnostics
-        diagnostics(results.mcmc)
-
-    def test_regression_methods(self):
-        from biolith.regression import (
-            BARTRegression,
-            LinearRegression,
-            MLPRegression,
-        )
-        from biolith.utils import fit
-
-        data, true_params = simulate(simulate_missing=True)
-
-        for reg_class in [LinearRegression, MLPRegression, BARTRegression]:
-            results = fit(
-                occu, **data, regressor_occ=reg_class, num_chains=1, timeout=600
-            )
-            self.assertTrue(
-                np.allclose(
-                    results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1
-                )
-            )
-
-    def test_site_random_effects(self):
-
-        data, true_params = simulate(
-            site_random_effects=True,
-            obs_random_effects=False,
-            deployment_days_per_site=7000,  # to ensure enough data for random effects
-        )
-
-        from biolith.evaluation import lppd
-        from biolith.utils import fit, predict
-
-        results = fit(
-            occu,
-            **data,
-            num_chains=1,
-            num_samples=500,
-            timeout=600,
-        )
-        posterior_samples = predict(occu, results.mcmc, **data)
-        l = lppd(occu, posterior_samples, **data)
-
-        results_re = fit(
-            occu,
-            **data,
-            site_random_effects=True,
-            obs_random_effects=False,
-            num_chains=1,
-            num_samples=500,
-            timeout=600,
-        )
-        posterior_samples_re = predict(
-            occu,
-            results_re.mcmc,
-            **data,
-            site_random_effects=True,
-            obs_random_effects=False,
-        )
-        l_re = lppd(occu, posterior_samples_re, **data)
-
-        self.assertTrue(l_re >= 0.95 * l)
-        self.assertTrue("site_re_sd" in results_re.samples)
-        self.assertTrue("site_re_occ" in results_re.samples)
-        self.assertTrue("site_re_det" in results_re.samples)
-        self.assertTrue(results_re.samples["site_re_sd"].mean() > 0)
-        self.assertTrue(
-            np.allclose(
-                results_re.samples["psi"].mean(), true_params["z"].mean(), atol=0.15
-            )
-        )
-
-    def test_obs_random_effects(self):
-        data, true_params = simulate(simulate_missing=True)
-
-        from biolith.utils import fit
-
-        results = fit(
-            occu,
-            **data,
-            obs_random_effects=True,
-            num_chains=1,
-            num_samples=500,
-            timeout=600,
-        )
-
-        self.assertTrue("obs_re_sd" in results.samples)
-        self.assertTrue("obs_re" in results.samples)
-        self.assertTrue(results.samples["obs_re_sd"].mean() > 0)
-        self.assertTrue(
-            np.allclose(
-                results.samples["psi"].mean(), true_params["z"].mean(), atol=0.15
-            )
-        )
-
-    def test_combined_random_effects(self):
-        data, true_params = simulate(simulate_missing=True)
-
-        from biolith.utils import fit
-
-        results = fit(
-            occu,
-            **data,
-            site_random_effects=True,
-            obs_random_effects=True,
-            num_chains=1,
-            num_samples=500,
-            timeout=600,
-        )
-
-        self.assertTrue("site_re_sd" in results.samples)
-        self.assertTrue("site_re_occ" in results.samples)
-        self.assertTrue("site_re_det" in results.samples)
-        self.assertTrue("obs_re_sd" in results.samples)
-        self.assertTrue("obs_re" in results.samples)
-        self.assertTrue(
-            np.allclose(
-                results.samples["psi"].mean(), true_params["z"].mean(), atol=0.15
-            )
-        )
-
-
-if __name__ == "__main__":
-    unittest.main()

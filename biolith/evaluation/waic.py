@@ -1,4 +1,3 @@
-import unittest
 from typing import Callable, Dict
 
 import jax.numpy as jnp
@@ -60,13 +59,13 @@ def waic(
 
     valid_obs = (
         jnp.isfinite(kwargs["obs"])
-        & jnp.isfinite(kwargs["obs_covs"]).all(axis=-1)
-        & jnp.isfinite(kwargs["site_covs"]).all(axis=-1)[:, None, None]
+        & jnp.isfinite(kwargs["obs_covs"]).all(axis=-1)[None, ...]
+        & jnp.isfinite(kwargs["site_covs"]).all(axis=-1)[None, :, None, None]
     )
 
     # Get log likelihood: shape (n_samples, n_visits, n_sites) - match LPPD implementation
     log_lik = log_likelihood(model_fn, posterior_samples, **kwargs)["y"].transpose(
-        (0, 3, 2, 1)
+        (0, 4, 3, 2, 1)
     )
 
     # Calculate lppd for each valid observation - same as LPPD implementation
@@ -113,8 +112,8 @@ def waic_manual(
 
     valid_obs = (
         jnp.isfinite(data["obs"])
-        & jnp.isfinite(data["obs_covs"]).all(axis=-1)
-        & jnp.isfinite(data["site_covs"]).all(axis=-1)[:, None, None]
+        & jnp.isfinite(data["obs_covs"]).all(axis=-1)[None, ...]
+        & jnp.isfinite(data["site_covs"]).all(axis=-1)[None, :, None, None]
     )
 
     # Get manual log likelihood: shape (n_samples, n_sites, n_visits)
@@ -135,29 +134,23 @@ def waic_manual(
     return {"waic": waic_value, "p_waic": p_waic, "lppd": lppd}
 
 
-class TestWAIC(unittest.TestCase):
+def test_waic():
+    from biolith.models import occu, simulate
+    from biolith.utils import fit, predict
 
-    def test_waic(self):
-        from biolith.models import occu, simulate
-        from biolith.utils import fit, predict
+    data, _ = simulate(simulate_missing=True, random_seed=1)
+    results = fit(occu, **data)
+    posterior_samples = predict(occu, results.mcmc, **data)
 
-        data, _ = simulate(simulate_missing=True, random_seed=1)
-        results = fit(occu, **data)
-        posterior_samples = predict(occu, results.mcmc, **data)
+    waic_result = waic(occu, posterior_samples, **data)
+    waic_manual_result = waic_manual(posterior_samples, data)
 
-        waic_result = waic(occu, posterior_samples, **data)
-        waic_manual_result = waic_manual(posterior_samples, data)
+    for wr in [waic_result, waic_manual_result]:
 
-        for wr in [waic_result, waic_manual_result]:
+        # Check that all values are finite
+        assert jnp.isfinite(wr["waic"]), "WAIC should be finite."
+        assert jnp.isfinite(wr["p_waic"]), "p_WAIC should be finite."
+        assert jnp.isfinite(wr["lppd"]), "LPPD should be finite."
 
-            # Check that all values are finite
-            self.assertTrue(jnp.isfinite(wr["waic"]), "WAIC should be finite.")
-            self.assertTrue(jnp.isfinite(wr["p_waic"]), "p_WAIC should be finite.")
-            self.assertTrue(jnp.isfinite(wr["lppd"]), "LPPD should be finite.")
-
-            # Check that p_waic is positive
-            self.assertTrue(wr["p_waic"] > 0, "p_WAIC should be positive.")
-
-
-if __name__ == "__main__":
-    unittest.main()
+        # Check that p_waic is positive
+        assert wr["p_waic"] > 0, "p_WAIC should be positive."

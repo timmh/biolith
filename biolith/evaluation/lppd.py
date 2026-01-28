@@ -1,4 +1,3 @@
-import unittest
 from typing import Callable, Dict
 
 import jax.numpy as jnp
@@ -51,11 +50,11 @@ def lppd(
 
     valid_obs = (
         jnp.isfinite(kwargs["obs"])
-        & jnp.isfinite(kwargs["obs_covs"]).all(axis=-1)
-        & jnp.isfinite(kwargs["site_covs"]).all(axis=-1)[:, None, None]
+        & jnp.isfinite(kwargs["obs_covs"]).all(axis=-1)[None, ...]
+        & jnp.isfinite(kwargs["site_covs"]).all(axis=-1)[None, :, None, None]
     )
     log_lik = log_likelihood(model_fn, posterior_samples, **kwargs)["y"].transpose(
-        (0, 3, 2, 1)
+        (0, 4, 3, 2, 1)
     )
     lppd = jnp.sum(
         logsumexp(log_lik[:, valid_obs], axis=0) - np.log(log_lik.shape[0])
@@ -93,8 +92,8 @@ def lppd_manual(
 
     valid_obs = (
         jnp.isfinite(data["obs"])
-        & jnp.isfinite(data["obs_covs"]).all(axis=-1)
-        & jnp.isfinite(data["site_covs"]).all(axis=-1)[:, None, None]
+        & jnp.isfinite(data["obs_covs"]).all(axis=-1)[None, ...]
+        & jnp.isfinite(data["site_covs"]).all(axis=-1)[None, :, None, None]
     )
 
     log_lik_manual = log_likelihood_manual(posterior_samples, data)
@@ -107,25 +106,18 @@ def lppd_manual(
     return lppd_manual
 
 
-class TestLPPD(unittest.TestCase):
+def test_lppd():
+    from biolith.models import occu, simulate
+    from biolith.utils import fit, predict
 
-    def test_lppd(self):
-        from biolith.models import occu, simulate
-        from biolith.utils import fit, predict
+    data, _ = simulate(simulate_missing=True)
+    results = fit(occu, **data)
+    posterior_samples = predict(occu, results.mcmc, **data)
 
-        data, _ = simulate(simulate_missing=True)
-        results = fit(occu, **data)
-        posterior_samples = predict(occu, results.mcmc, **data)
+    l = lppd(occu, posterior_samples, **data)
+    l_manual = lppd_manual(posterior_samples, data)
 
-        l = lppd(occu, posterior_samples, **data)
-        l_manual = lppd_manual(posterior_samples, data)
-
-        self.assertTrue(-jnp.inf < l < 0, "LPPD should be negative and finite.")
-        self.assertTrue(
-            jnp.allclose(l, l_manual, rtol=1e-2),
-            "NumPyro LPPD should match manually computed LPPD.",
-        )
-
-
-if __name__ == "__main__":
-    unittest.main()
+    assert -jnp.inf < l < 0, "LPPD should be negative and finite."
+    assert jnp.allclose(l, l_manual, rtol=1e-2), (
+        "NumPyro LPPD should match manually computed LPPD."
+    )

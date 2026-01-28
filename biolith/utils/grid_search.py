@@ -9,7 +9,6 @@ from multiprocessing import Process, Queue, set_start_method
 set_start_method("spawn", force=True)
 
 import itertools
-import unittest
 import warnings
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Union
 
@@ -154,7 +153,7 @@ def grid_search_priors(
     obs_covs : jnp.ndarray
         Observation-level covariates of shape (n_sites, n_periods, n_replicates, n_obs_covs).
     obs : jnp.ndarray
-        Observed detection data of shape (n_sites, n_periods, n_replicates).
+        Observed detection data of shape (n_species, n_sites, n_periods, n_replicates).
     regressor_occ : Any
         Regression class for occupancy process (e.g., LinearRegression, MLPRegression, BARTRegression).
     regressor_det : Any
@@ -295,7 +294,7 @@ def grid_search_priors(
             )
 
     # Create stratification labels based on site detection history
-    site_detections = jnp.nansum(obs, axis=(1, 2)) > 0  # True if site has ≥1 detection
+    site_detections = jnp.nansum(obs, axis=(0, 2, 3)) > 0  # True if site has ≥1 detection
     stratify_labels = site_detections.astype(int)
 
     # Check if we have both occupied and unoccupied sites
@@ -380,11 +379,11 @@ def grid_search_priors(
                     # Split data
                     site_covs_train = site_covs[train_idx]
                     obs_covs_train = obs_covs[train_idx]
-                    obs_train = obs[train_idx]
+                    obs_train = obs[:, train_idx]
 
                     site_covs_val = site_covs[val_idx]
                     obs_covs_val = obs_covs[val_idx]
-                    obs_val = obs[val_idx]
+                    obs_val = obs[:, val_idx]
 
                     # Use multiprocessing to isolate the memory of each fold fit
                     q = Queue()
@@ -515,32 +514,25 @@ def grid_search_priors(
     return GridSearchResult(best_result, best_params, best_score, cv_results)
 
 
-class TestGridSearch(unittest.TestCase):
+def test_grid_search():
+    from biolith.models import occu, simulate
+    from biolith.regression import LinearRegression
 
-    def test_grid_search(self):
+    data, _ = simulate(simulate_missing=True)
 
-        from biolith.models import occu, simulate
-        from biolith.regression import LinearRegression
-
-        data, _ = simulate(simulate_missing=True)
-
-        grid_search_priors(
-            occu,
-            **data,
-            regressor_occ=LinearRegression,
-            regressor_det=LinearRegression,
-            prior_types=["normal", "laplace"],
-            prior_params_occ={
-                "normal": {"loc": [0.0], "scale": [1.0]},
-                "laplace": {"loc": [0.0], "scale": [1.0]},
-            },
-            cv_folds=2,
-            num_chains=1,
-            num_warmup=30,
-            num_samples=30,
-            timeout=600,
-        )
-
-
-if __name__ == "__main__":
-    unittest.main()
+    grid_search_priors(
+        occu,
+        **data,
+        regressor_occ=LinearRegression,
+        regressor_det=LinearRegression,
+        prior_types=["normal", "laplace"],
+        prior_params_occ={
+            "normal": {"loc": [0.0], "scale": [1.0]},
+            "laplace": {"loc": [0.0], "scale": [1.0]},
+        },
+        cv_folds=2,
+        num_chains=1,
+        num_warmup=30,
+        num_samples=30,
+        timeout=600,
+    )

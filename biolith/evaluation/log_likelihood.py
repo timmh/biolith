@@ -1,4 +1,3 @@
-import unittest
 from typing import Callable, Dict
 
 import jax
@@ -78,58 +77,52 @@ def log_likelihood_manual(
     >>> log_likelihood_manual(posterior_samples, data
     """
 
-    obs_transposed = data["obs"].transpose((2, 1, 0))
+    obs_transposed = data["obs"].transpose((3, 2, 1, 0))
     prob_detection = posterior_samples["prob_detection"]
     psi = posterior_samples["psi"]
     if psi.ndim == 2:
-        psi = psi[:, None, :]
+        psi = psi[:, None, :, None]
+    elif psi.ndim == 3:
+        psi = psi[:, None, ...]
     if psi.shape[1] != obs_transposed.shape[1]:
         psi = jnp.broadcast_to(
-            psi, (psi.shape[0], obs_transposed.shape[1], psi.shape[2])
+            psi, (psi.shape[0], obs_transposed.shape[1], psi.shape[2], psi.shape[3])
         )
-    psi = psi[:, None, :, :]
+    psi = psi[:, None, ...]
 
     prob_det_occ = jnp.clip(prob_detection * psi, min=eps, max=1 - eps)
     log_lik_manual = jnp.log(prob_det_occ) * obs_transposed[None, ...] + jnp.log(
         jnp.clip(1 - prob_detection * psi, min=eps, max=1 - eps)
     ) * (1 - obs_transposed[None, ...])
 
-    return log_lik_manual.transpose((0, 3, 2, 1))
+    return log_lik_manual.transpose((0, 4, 3, 2, 1))
 
 
-class TestLogLikelihood(unittest.TestCase):
+def test_log_likelihood():
+    from biolith.models import occu, simulate
+    from biolith.utils import fit, predict
 
-    def test_log_likelihood(self):
-        from biolith.models import occu, simulate
-        from biolith.utils import fit, predict
+    data, _ = simulate(simulate_missing=True)
+    valid_obs = (
+        jnp.isfinite(data["obs"])
+        & jnp.isfinite(data["obs_covs"]).all(axis=-1)[None, ...]
+        & jnp.isfinite(data["site_covs"]).all(axis=-1)[None, :, None, None]
+    )
 
-        data, _ = simulate(simulate_missing=True)
-        valid_obs = (
-            jnp.isfinite(data["obs"])
-            & jnp.isfinite(data["obs_covs"]).all(axis=-1)
-            & jnp.isfinite(data["site_covs"]).all(axis=-1)[:, None, None]
-        )
+    results = fit(occu, **data)
+    posterior_samples = predict(occu, results.mcmc, **data)
 
-        results = fit(occu, **data)
-        posterior_samples = predict(occu, results.mcmc, **data)
+    log_lik = log_likelihood(occu, posterior_samples, **data)["y"].transpose(
+        (0, 4, 3, 2, 1)
+    )
 
-        log_lik = log_likelihood(occu, posterior_samples, **data)["y"].transpose(
-            (0, 3, 2, 1)
-        )
+    log_lik_manual = log_likelihood_manual(posterior_samples, data)
 
-        log_lik_manual = log_likelihood_manual(posterior_samples, data)
+    log_lik_per_obs = logsumexp(log_lik[:, valid_obs], axis=0) - jnp.log(
+        log_lik.shape[0]
+    )
+    log_lik_manual_per_obs = logsumexp(
+        log_lik_manual[:, valid_obs], axis=0
+    ) - jnp.log(log_lik_manual.shape[0])
 
-        log_lik_per_obs = logsumexp(log_lik[:, valid_obs], axis=0) - jnp.log(
-            log_lik.shape[0]
-        )
-        log_lik_manual_per_obs = logsumexp(
-            log_lik_manual[:, valid_obs], axis=0
-        ) - jnp.log(log_lik_manual.shape[0])
-
-        self.assertTrue(
-            jnp.allclose(log_lik_per_obs, log_lik_manual_per_obs, rtol=1e-1)
-        )
-
-
-if __name__ == "__main__":
-    unittest.main()
+    assert jnp.allclose(log_lik_per_obs, log_lik_manual_per_obs, rtol=1e-1)

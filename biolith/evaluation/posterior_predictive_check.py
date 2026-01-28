@@ -56,13 +56,15 @@ def posterior_predictive_check(
         posterior_samples (dict): A dictionary from a NumPyro Predictive
             call or a similar source. It must contain the following keys:
             - 'y': Replicated observation data from the posterior predictive
-                   distribution. Shape: (num_samples, num_replicates, num_periods, num_sites).
+                   distribution. Shape: (num_samples, num_replicates, num_periods,
+                   num_sites, n_species).
             - 'psi': Posterior samples for the occupancy probability.
-                     Shape: (num_samples, num_periods, num_sites).
+                     Shape: (num_samples, num_periods, num_sites, n_species).
             - 'prob_detection': Posterior samples for the detection probability. This is
                    necessary to compute the expected values for the GOF tests.
-                   Shape: (num_samples, num_replicates, num_periods, num_sites).
-        obs (jnp.ndarray): Ground truth observations of shape (n_sites, n_periods, n_replicates).
+                   Shape: (num_samples, num_replicates, num_periods, num_sites, n_species).
+        obs (jnp.ndarray): Ground truth observations of shape
+            (n_species, n_sites, n_periods, n_replicates).
         group_by (str): Specifies how to aggregate the data for the test
                         statistic. Must be either 'site' or 'revisit'.
         statistic (str): The discrepancy statistic to use for the comparison.
@@ -112,40 +114,42 @@ def posterior_predictive_check(
         raise ValueError(f"`statistic` must be one of {list(stat_funcs.keys())}")
     stat_func = stat_funcs[statistic]
 
-    # Transpose y_rep from (samples, replicates, periods, sites) to
-    # (samples, sites, periods, replicates) to align with 'obs' and 'p'.
-    if y_rep.ndim == 4:
-        y_rep = jnp.transpose(y_rep, (0, 3, 2, 1))
-    if p.ndim == 4:
-        p = jnp.transpose(p, (0, 3, 2, 1))
+    # Transpose y_rep from (samples, replicates, periods, sites, species) to
+    # (samples, species, sites, periods, replicates) to align with 'obs' and 'p'.
+    if y_rep.ndim == 5:
+        y_rep = jnp.transpose(y_rep, (0, 4, 3, 2, 1))
+    if p.ndim == 5:
+        p = jnp.transpose(p, (0, 4, 3, 2, 1))
 
     # The expected value for an observation y_ij is the product of the
     # occupancy probability (psi_i) and the detection probability (p_ij).
     # TODO: This is only valid without false positives.
-    # E has a shape of (num_samples, num_sites, num_periods, num_replicates).
-    if psi.ndim == 2:
-        psi = psi[:, None, :]
-    psi_by_site = psi.transpose((0, 2, 1))
-    E = psi_by_site[:, :, :, None] * p
+    # E has a shape of (num_samples, n_species, num_sites, num_periods, num_replicates).
+    if psi.ndim == 3:
+        psi = psi[:, None, ...]
+    elif psi.ndim == 2:
+        psi = psi[:, None, :, None]
+    psi_by_site = psi.transpose((0, 3, 2, 1))
+    E = psi_by_site[..., None] * p
 
     # Create a mask for non-missing observations
     obs_mask = jnp.isfinite(obs)
 
     if group_by == "site":
-        obs_grouped = jnp.nansum(obs, axis=(1, 2))
-        y_rep_grouped = jnp.where(obs_mask[None, :, :, :], y_rep, 0).sum(axis=(2, 3))
-        E_grouped = jnp.where(obs_mask[None, :, :, :], E, 0).sum(axis=(2, 3))
+        obs_grouped = jnp.nansum(obs, axis=(2, 3))
+        y_rep_grouped = jnp.where(obs_mask[None, :, :, :, :], y_rep, 0).sum(axis=(3, 4))
+        E_grouped = jnp.where(obs_mask[None, :, :, :, :], E, 0).sum(axis=(3, 4))
 
         # Calculate the discrepancy for the observed data against the expected values.
-        d_obs = jnp.sum(stat_func(obs_grouped, E_grouped), axis=1)
-        d_rep = jnp.sum(stat_func(y_rep_grouped, E_grouped), axis=1)
-    elif group_by == "revisit":
-        obs_grouped = jnp.nansum(obs, axis=0)
-        y_rep_grouped = jnp.where(obs_mask[None, :, :, :], y_rep, 0).sum(axis=1)
-        E_grouped = jnp.where(obs_mask[None, :, :, :], E, 0).sum(axis=1)
-
         d_obs = jnp.sum(stat_func(obs_grouped, E_grouped), axis=(1, 2))
         d_rep = jnp.sum(stat_func(y_rep_grouped, E_grouped), axis=(1, 2))
+    elif group_by == "revisit":
+        obs_grouped = jnp.nansum(obs, axis=1)
+        y_rep_grouped = jnp.where(obs_mask[None, :, :, :, :], y_rep, 0).sum(axis=2)
+        E_grouped = jnp.where(obs_mask[None, :, :, :, :], E, 0).sum(axis=2)
+
+        d_obs = jnp.sum(stat_func(obs_grouped, E_grouped), axis=(1, 2, 3))
+        d_rep = jnp.sum(stat_func(y_rep_grouped, E_grouped), axis=(1, 2, 3))
     else:
         raise ValueError("`group_by` must be either 'site' or 'revisit'")
 

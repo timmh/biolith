@@ -1,7 +1,6 @@
-import unittest
-
 import jax
 import jax.numpy as jnp
+import math
 import numpyro
 from numpyro.distributions import Distribution, Normal
 
@@ -59,82 +58,95 @@ class MLPRegression(AbstractRegression):
         Parameters
         ----------
         covs : jnp.ndarray
-            Site covariate matrix of shape (n_covs, n_sites) or observation covariate
-            matrix of shape (n_covs, n_revisits, n_sites) or
-            (n_covs, n_replicates, n_periods, n_sites).
+            Covariate matrix of shape (n_obs, n_covs).
 
         Returns
         -------
         jnp.ndarray
-            Predictor of shape (n_sites,) or of shape (n_revisits, n_sites).
+            Predictor of shape (n_obs,) or of shape (n_obs, *batch_shape).
         """
-        if covs.ndim not in [2, 3, 4]:
+        if covs.ndim != 2:
             raise ValueError(
-                f"Invalid covariate shape: {covs.shape}. Expected 2D, 3D, or 4D array."
+                f"Invalid covariate shape: {covs.shape}. Expected 2D array."
             )
         original_shape = covs.shape
-        flattened = covs.reshape(original_shape[0], -1).T
-        x = flattened
+        x = covs
+
+        batch_shape = self.weights[0].shape[:-2]
+        if batch_shape:
+            batch_size = math.prod(batch_shape)
+            weights = [w.reshape((batch_size,) + w.shape[-2:]) for w in self.weights]
+            biases = [b.reshape((batch_size,) + b.shape[-1:]) for b in self.biases]
+
+            def forward(x, weights, biases):
+                for w, b in zip(weights[:-1], biases[:-1]):
+                    x = jnp.dot(x, w) + b
+                    x = jax.nn.relu(x)
+                x = jnp.dot(x, weights[-1]) + biases[-1]
+                return jnp.squeeze(x, -1)
+
+            outputs = jax.vmap(lambda w, b: forward(x, w, b))(weights, biases)
+            outputs = outputs.reshape(batch_shape + original_shape[:1])
+            perm = list(range(len(batch_shape), len(batch_shape) + len(original_shape[:1]))) + list(
+                range(len(batch_shape))
+            )
+            return outputs.transpose(perm)
+
         for w, b in zip(self.weights[:-1], self.biases[:-1]):
             x = jnp.dot(x, w) + b
             x = jax.nn.relu(x)
         x = jnp.dot(x, self.weights[-1]) + self.biases[-1]
         x = jnp.squeeze(x, -1)
-        return x.reshape(original_shape[1:])
+        return x.reshape(original_shape[:1])
 
 
-class TestMLPRegression(unittest.TestCase):
-    def test_mlp_regression(self):
-        from numpyro.infer import MCMC, NUTS
+def test_mlp_regression():
+    from numpyro.infer import MCMC, NUTS
 
-        rng = jax.random.PRNGKey(0)
-        x_data = jnp.linspace(-jnp.pi, jnp.pi, 50)
-        y_true = jnp.sin(x_data)
-        y_obs = y_true + 0.1 * jax.random.normal(rng, shape=y_true.shape)
+    rng = jax.random.PRNGKey(0)
+    x_data = jnp.linspace(-jnp.pi, jnp.pi, 50)
+    y_true = jnp.sin(x_data)
+    y_obs = y_true + 0.1 * jax.random.normal(rng, shape=y_true.shape)
 
-        def model(x, y=None):
-            lr = MLPRegression("mlp", n_covs=1, hidden_layer_sizes=[5, 5])
-            mu = lr(x[None, :])
-            numpyro.sample("obs", Normal(mu, 0.1), obs=y)  # type: ignore
+    def model(x, y=None):
+        lr = MLPRegression("mlp", n_covs=1, hidden_layer_sizes=[5, 5])
+        mu = lr(x)
+        numpyro.sample("obs", Normal(mu, 0.1), obs=y)  # type: ignore
 
-        mcmc = MCMC(NUTS(model), num_warmup=100, num_samples=100)
-        mcmc.run(rng, x_data, y_obs)
+    mcmc = MCMC(NUTS(model), num_warmup=100, num_samples=100)
+    mcmc.run(rng, x_data[:, None], y_obs)
 
-        predictive = numpyro.infer.Predictive(model, mcmc.get_samples())
-        samples = predictive(rng, x_data)
+    predictive = numpyro.infer.Predictive(model, mcmc.get_samples())
+    samples = predictive(rng, x_data[:, None])
 
-        preds = jnp.mean(samples["obs"], axis=0)
-        self.assertTrue(jnp.mean(jnp.abs(preds - y_obs)) < 0.3)
+    preds = jnp.mean(samples["obs"], axis=0)
+    assert jnp.mean(jnp.abs(preds - y_obs)) < 0.3
 
-        # Plot results
-        try:
-            import matplotlib.pyplot as plt
+    # Plot results
+    try:
+        import matplotlib.pyplot as plt
 
-            ci_lower = jnp.percentile(samples["obs"], 5, axis=0)
-            ci_upper = jnp.percentile(samples["obs"], 95, axis=0)
-            plt.figure(figsize=(10, 6))
-            plt.scatter(x_data, y_obs, label="Simulated Data", alpha=0.7)
-            plt.plot(x_data, preds, label="Mean Prediction", color="red")
-            plt.fill_between(
-                x_data,
-                ci_lower,
-                ci_upper,
-                color="red",
-                alpha=0.3,
-                label="90% Confidence Interval",
-            )
-            plt.xlabel("x")
-            plt.ylabel("y")
-            plt.title("MLP Regression Fit")
-            plt.legend()
-            import os
+        ci_lower = jnp.percentile(samples["obs"], 5, axis=0)
+        ci_upper = jnp.percentile(samples["obs"], 95, axis=0)
+        plt.figure(figsize=(10, 6))
+        plt.scatter(x_data, y_obs, label="Simulated Data", alpha=0.7)
+        plt.plot(x_data, preds, label="Mean Prediction", color="red")
+        plt.fill_between(
+            x_data,
+            ci_lower,
+            ci_upper,
+            color="red",
+            alpha=0.3,
+            label="90% Confidence Interval",
+        )
+        plt.xlabel("x")
+        plt.ylabel("y")
+        plt.title("MLP Regression Fit")
+        plt.legend()
+        import os
 
-            os.makedirs("figures", exist_ok=True)
-            plt.savefig("figures/mlp_regression_test_plot.png")
-            plt.close()
-        except ImportError:
-            print("Matplotlib is not installed, skipping plot generation.")
-
-
-if __name__ == "__main__":
-    unittest.main()
+        os.makedirs("figures", exist_ok=True)
+        plt.savefig("figures/mlp_regression_test_plot.png")
+        plt.close()
+    except ImportError:
+        print("Matplotlib is not installed, skipping plot generation.")

@@ -1,9 +1,9 @@
-import unittest
-
 import jax
 import jax.numpy as jnp
+import math
 import numpyro
 import numpyro.distributions as dist
+from numpyro.primitives import _PYRO_STACK, plate as plate_handler
 from jax import lax
 
 from biolith.regression.abstract import AbstractRegression
@@ -67,8 +67,8 @@ class BARTRegression(AbstractRegression):
 
         sigma_mu = self.scale / (self.k * jnp.sqrt(self.n_trees))
 
-        with numpyro.plate(f"{self.name}_trees", self.n_trees, dim=-2):
-            with numpyro.plate(f"{self.name}_nodes", self.num_nodes, dim=-1):
+        with numpyro.plate(f"{self.name}_trees", self.n_trees):
+            with numpyro.plate(f"{self.name}_nodes", self.num_nodes):
                 self.leaf_values = numpyro.sample(
                     f"{self.name}_leaf_values", dist.Normal(0, sigma_mu)  # type: ignore
                 )
@@ -76,13 +76,20 @@ class BARTRegression(AbstractRegression):
         depths = jnp.floor(jnp.log2(jnp.arange(1, self.num_internal_nodes + 1)))
         split_probs = alpha * (1 + depths) ** (-beta)
 
-        with numpyro.plate(f"{self.name}_trees", self.n_trees, dim=-2):
+        with numpyro.plate(f"{self.name}_trees", self.n_trees):
             with numpyro.plate(
-                f"{self.name}_internal_nodes", self.num_internal_nodes, dim=-1
+                f"{self.name}_internal_nodes", self.num_internal_nodes
             ):
+                outer_plate_count = (
+                    sum(1 for frame in _PYRO_STACK if isinstance(frame, plate_handler))
+                    - 1
+                )
+                split_probs_broadcast = split_probs.reshape(
+                    (self.num_internal_nodes,) + (1,) * max(outer_plate_count, 0)
+                )
                 self.is_split_node = numpyro.sample(
                     f"{self.name}_is_split",
-                    dist.Bernoulli(split_probs),  # type: ignore
+                    dist.Bernoulli(split_probs_broadcast),  # type: ignore
                     infer={"enumerate": None},
                 )
                 self.split_vars = numpyro.sample(
@@ -100,36 +107,21 @@ class BARTRegression(AbstractRegression):
         Parameters
         ----------
         covs : jnp.ndarray
-            Site covariate matrix of shape (n_covs, n_sites) or observation covariate
-            matrix of shape (n_covs, n_revisits, n_sites) or
-            (n_covs, n_replicates, n_periods, n_sites).
+            Covariate matrix of shape (n_obs, n_covs).
 
         Returns
         -------
         jnp.ndarray
-            Predictor of shape (n_sites,) or of shape (n_revisits, n_sites).
+            Predictor of shape (n_obs,) or of shape (n_obs, *batch_shape).
         """
-        if covs.ndim not in [2, 3, 4]:
+        if covs.ndim != 2:
             raise ValueError(
-                f"Invalid covariate shape: {covs.shape}. Expected 2D, 3D, or 4D array."
+                f"Invalid covariate shape: {covs.shape}. Expected 2D array."
             )
-
-        # change order of dimensions in covs to
-        # (n_sites, n_covs), (n_sites, n_revisits, n_covs), or
-        # (n_sites, n_periods, n_replicates, n_covs)
-        if covs.ndim == 4:
-            covs = covs.transpose((3, 2, 1, 0))
-        elif covs.ndim == 3:
-            covs = covs.transpose((2, 1, 0))
-        else:
-            covs = covs.transpose((1, 0))
-
-        original_shape = covs.shape
-        covs_flat = covs.reshape(-1, original_shape[-1]) if covs.ndim >= 3 else covs
-
-        if covs_flat.shape[-1] != self.n_covs:
+        covs_flat = covs
+        if covs_flat.shape[1] != self.n_covs:
             raise ValueError(
-                f"Covariate dim mismatch. Model has {self.n_covs}, got {covs_flat.shape[-1]}."
+                f"Covariate dim mismatch. Model has {self.n_covs}, got {covs_flat.shape[1]}."
             )
 
         def get_leaf_idx_for_sample_and_tree(
@@ -145,33 +137,72 @@ class BARTRegression(AbstractRegression):
 
             return lax.fori_loop(0, self.max_depth, body_fun, 0)
 
-        # Use the original parameter arrays directly without trying to handle enumeration
-        is_split_node = self.is_split_node
-        split_vars = self.split_vars
-        split_values = self.split_values
+        def predict_one(leaf_values, is_split_node, split_vars, split_values):
+            leaf_indices = jax.vmap(
+                lambda x: jax.vmap(
+                    get_leaf_idx_for_sample_and_tree, in_axes=(None, 0, 0, 0)
+                )(x, is_split_node, split_vars, split_values)
+            )(covs_flat)
 
-        leaf_indices = jax.vmap(
-            lambda x: jax.vmap(
-                get_leaf_idx_for_sample_and_tree, in_axes=(None, 0, 0, 0)
-            )(x, is_split_node, split_vars, split_values)
-        )(covs_flat)
+            def gather_leaf_values(leaf_indices_for_sample):
+                return jax.vmap(
+                    lambda tree_idx, leaf_idx: leaf_values[tree_idx, leaf_idx]  # type: ignore
+                )(jnp.arange(self.n_trees), leaf_indices_for_sample)
 
-        def gather_leaf_values(leaf_indices_for_sample):
-            return jax.vmap(
-                lambda tree_idx, leaf_idx: self.leaf_values[tree_idx, leaf_idx]  # type: ignore
-            )(jnp.arange(self.n_trees), leaf_indices_for_sample)
+            predictions_per_tree = jax.vmap(gather_leaf_values)(leaf_indices)
+            return self.k * jnp.sum(predictions_per_tree, axis=-1)
 
-        predictions_per_tree = jax.vmap(gather_leaf_values)(leaf_indices)
-        final_prediction = self.k * jnp.sum(predictions_per_tree, axis=-1)
+        def reorder_param(param, node_dim):
+            shape = param.shape
+            tree_axes = [i for i, d in enumerate(shape) if d == self.n_trees]
+            node_axes = [i for i, d in enumerate(shape) if d == node_dim]
+            if len(tree_axes) != 1 or len(node_axes) != 1:
+                raise ValueError(f"Unexpected parameter shape: {shape}.")
+            tree_axis = tree_axes[0]
+            node_axis = node_axes[0]
+            batch_axes = [i for i in range(len(shape)) if i not in (tree_axis, node_axis)]
+            batch_shape = tuple(shape[i] for i in batch_axes)
+            perm = batch_axes + [tree_axis, node_axis]
+            return param.transpose(perm), batch_shape
 
-        if covs.ndim == 4:
-            pred = final_prediction.reshape(
-                (original_shape[0], original_shape[1], original_shape[2])
+        leaf_values, batch_shape = reorder_param(self.leaf_values, self.num_nodes)
+        is_split_node, batch_shape_split = reorder_param(
+            self.is_split_node, self.num_internal_nodes
+        )
+        split_vars, batch_shape_vars = reorder_param(
+            self.split_vars, self.num_internal_nodes
+        )
+        split_values, batch_shape_vals = reorder_param(
+            self.split_values, self.num_internal_nodes
+        )
+
+        if batch_shape not in (batch_shape_split, batch_shape_vars, batch_shape_vals):
+            raise ValueError("Inconsistent batch shapes in BART parameters.")
+
+        if batch_shape:
+            batch_size = math.prod(batch_shape)
+            leaf_values = leaf_values.reshape((batch_size, self.n_trees, self.num_nodes))
+            is_split_node = is_split_node.reshape(
+                (batch_size, self.n_trees, self.num_internal_nodes)
             )
-            return pred.transpose((2, 1, 0))
-        if covs.ndim == 3:
-            pred = final_prediction.reshape((original_shape[0], original_shape[1]))
-            return pred.transpose((1, 0))
+            split_vars = split_vars.reshape(
+                (batch_size, self.n_trees, self.num_internal_nodes)
+            )
+            split_values = split_values.reshape(
+                (batch_size, self.n_trees, self.num_internal_nodes)
+            )
+
+            final_prediction = jax.vmap(predict_one, in_axes=(0, 0, 0, 0))(
+                leaf_values, is_split_node, split_vars, split_values
+            )
+
+            n_obs = covs_flat.shape[0]
+            final_prediction = final_prediction.reshape(batch_shape + (n_obs,))
+            perm = [len(batch_shape)] + list(range(len(batch_shape)))
+            return final_prediction.transpose(perm)
+
+        final_prediction = predict_one(leaf_values, is_split_node, split_vars, split_values)
+
         return final_prediction
 
     def compute_feature_importances(self) -> None:
@@ -179,128 +210,131 @@ class BARTRegression(AbstractRegression):
         all trees and internal nodes."""
         used_features = jnp.where(self.is_split_node == 1, self.split_vars, -1)
         one_hot_feats = jax.nn.one_hot(used_features, self.n_covs)
-        counts = jnp.sum(one_hot_feats, axis=(0, 1))
-        total_splits = jnp.sum(counts)
+
+        shape = one_hot_feats.shape
+        tree_axes = [i for i, d in enumerate(shape[:-1]) if d == self.n_trees]
+        node_axes = [i for i, d in enumerate(shape[:-1]) if d == self.num_internal_nodes]
+        if len(tree_axes) != 1 or len(node_axes) != 1:
+            raise ValueError(f"Unexpected feature importance shape: {shape}.")
+        counts = jnp.sum(one_hot_feats, axis=(tree_axes[0], node_axes[0]))
+
+        total_splits = jnp.sum(counts, axis=-1, keepdims=True)
         feature_importances = counts / (total_splits + 1e-10)
+        if feature_importances.ndim > 1:
+            feature_importances = feature_importances.transpose(
+                (feature_importances.ndim - 1,) + tuple(range(feature_importances.ndim - 1))
+            )
         numpyro.deterministic(f"{self.name}_feature_importances", feature_importances)
 
 
-class TestBARTRegression(unittest.TestCase):
-    def test_bart_regression(self):
-        from numpyro.infer import MCMC, NUTS, DiscreteHMCGibbs, Predictive
+def test_bart_regression():
+    from numpyro.infer import MCMC, NUTS, DiscreteHMCGibbs, Predictive
 
-        rng_key = jax.random.PRNGKey(42)
-        rng_key, rng_x, rng_obs, rng_inf = jax.random.split(rng_key, 4)
+    rng_key = jax.random.PRNGKey(42)
+    rng_key, rng_x, rng_obs, rng_inf = jax.random.split(rng_key, 4)
 
-        n_samples = 50
-        x_data = jax.random.normal(rng_x, (n_samples,))[None, :]
-        y_true = jnp.sin(x_data[0, :] * jnp.pi)
-        y_obs = y_true + 0.1 * jax.random.normal(rng_obs, shape=y_true.shape)
+    n_samples = 50
+    x_data = jax.random.normal(rng_x, (n_samples, 1))
+    y_true = jnp.sin(x_data[:, 0] * jnp.pi)
+    y_obs = y_true + 0.1 * jax.random.normal(rng_obs, shape=y_true.shape)
 
-        x_train = x_data
-        y_train = y_obs
+    x_train = x_data
+    y_train = y_obs
 
-        def model(x, y=None):
-            bart = BARTRegression(
-                "bart", n_covs=x.shape[0], n_trees=20, max_depth=2, scale=1.0
-            )
-            mu = bart(x)
-            with numpyro.plate("data", x.shape[1]):
-                numpyro.sample("obs", dist.Normal(mu, 0.1), obs=y)  # type: ignore
-
-        kernel = DiscreteHMCGibbs(NUTS(model))
-        mcmc = MCMC(kernel, num_warmup=500, num_samples=500)
-        mcmc.run(rng_inf, x_train, y_train)
-
-        predictive = Predictive(model, mcmc.get_samples())
-        samples = predictive(rng_key, x_train)
-
-        preds = jnp.mean(samples["obs"], axis=0)
-
-        mae = jnp.mean(jnp.abs(preds - y_obs))
-        self.assertTrue(
-            mae < 0.3, f"Mean Absolute Error should be < 0.3, but was {mae:.4f}"
+    def model(x, y=None):
+        bart = BARTRegression(
+            "bart", n_covs=x.shape[1], n_trees=20, max_depth=2, scale=1.0
         )
+        mu = bart(x)
+        with numpyro.plate("data", x.shape[0]):
+            numpyro.sample("obs", dist.Normal(mu, 0.1), obs=y)  # type: ignore
 
-        # Plot results
-        try:
-            import matplotlib.pyplot as plt
+    kernel = DiscreteHMCGibbs(NUTS(model))
+    mcmc = MCMC(kernel, num_warmup=500, num_samples=500)
+    mcmc.run(rng_inf, x_train, y_train)
 
-            ci_lower = jnp.percentile(samples["obs"], 5, axis=0)
-            ci_upper = jnp.percentile(samples["obs"], 95, axis=0)
-            sort_indices = jnp.argsort(x_data[0, :])
-            x_data_sorted = x_data[0, sort_indices]
-            y_obs_sorted = y_obs[sort_indices]
-            y_true_sorted = y_true[sort_indices]
-            preds_sorted = preds[sort_indices]
-            ci_lower_sorted = ci_lower[sort_indices]
-            ci_upper_sorted = ci_upper[sort_indices]
-            plt.figure(figsize=(10, 6))
-            plt.scatter(x_data_sorted, y_obs_sorted, label="Simulated Data", alpha=0.6)
-            plt.plot(x_data_sorted, y_true_sorted, "g-", label="True Function")
-            plt.plot(x_data_sorted, preds_sorted, "r-", label="Mean Prediction")
-            plt.fill_between(
-                x_data_sorted,
-                ci_lower_sorted,
-                ci_upper_sorted,
-                color="r",
-                alpha=0.2,
-                label="90% Confidence Interval",
-            )
-            plt.title("BART Regression on Noisy Sine Wave")
-            plt.xlabel("x")
-            plt.ylabel("y")
-            plt.legend()
-            import os
+    predictive = Predictive(model, mcmc.get_samples())
+    samples = predictive(rng_key, x_train)
 
-            os.makedirs("figures", exist_ok=True)
-            plt.savefig("figures/bart_regression_test_plot.png")
-            plt.close()
-        except ImportError:
-            print("Matplotlib is not installed, skipping plot generation.")
+    preds = jnp.mean(samples["obs"], axis=0)
 
-    def test_bart_regression_feature_importance(self):
-        from numpyro.infer import MCMC, NUTS, DiscreteHMCGibbs, Predictive
+    mae = jnp.mean(jnp.abs(preds - y_obs))
+    assert mae < 0.3, f"Mean Absolute Error should be < 0.3, but was {mae:.4f}"
 
-        rng_key = jax.random.PRNGKey(42)
-        rng_key, rng_cov1, rng_cov2, rng_obs, rng_inf = jax.random.split(rng_key, 5)
+    # Plot results
+    try:
+        import matplotlib.pyplot as plt
 
-        n_samples = 50
-        x_data = jnp.stack(
-            [
-                jax.random.normal(rng_cov1, (n_samples,)),
-                jax.random.normal(rng_cov2, (n_samples,)),
-            ],
-            axis=0,
+        ci_lower = jnp.percentile(samples["obs"], 5, axis=0)
+        ci_upper = jnp.percentile(samples["obs"], 95, axis=0)
+        sort_indices = jnp.argsort(x_data[:, 0])
+        x_data_sorted = x_data[sort_indices, 0]
+        y_obs_sorted = y_obs[sort_indices]
+        y_true_sorted = y_true[sort_indices]
+        preds_sorted = preds[sort_indices]
+        ci_lower_sorted = ci_lower[sort_indices]
+        ci_upper_sorted = ci_upper[sort_indices]
+        plt.figure(figsize=(10, 6))
+        plt.scatter(x_data_sorted, y_obs_sorted, label="Simulated Data", alpha=0.6)
+        plt.plot(x_data_sorted, y_true_sorted, "g-", label="True Function")
+        plt.plot(x_data_sorted, preds_sorted, "r-", label="Mean Prediction")
+        plt.fill_between(
+            x_data_sorted,
+            ci_lower_sorted,
+            ci_upper_sorted,
+            color="r",
+            alpha=0.2,
+            label="90% Confidence Interval",
         )
-        y_true = jnp.sin(x_data[0, :] * jnp.pi)
-        y_obs = y_true + 0.1 * jax.random.normal(rng_obs, shape=y_true.shape)
+        plt.title("BART Regression on Noisy Sine Wave")
+        plt.xlabel("x")
+        plt.ylabel("y")
+        plt.legend()
+        import os
 
-        x_train = x_data
-        y_train = y_obs
+        os.makedirs("figures", exist_ok=True)
+        plt.savefig("figures/bart_regression_test_plot.png")
+        plt.close()
+    except ImportError:
+        print("Matplotlib is not installed, skipping plot generation.")
 
-        def model(x, y=None):
-            bart = BARTRegression(
-                "bart", n_covs=x.shape[0], n_trees=20, max_depth=2, scale=1.0
-            )
-            mu = bart(x)
-            with numpyro.plate("data", x.shape[1]):
-                numpyro.sample("obs", dist.Normal(mu, 0.1), obs=y)  # type: ignore
 
-        kernel = DiscreteHMCGibbs(NUTS(model))
-        mcmc = MCMC(kernel, num_warmup=500, num_samples=500)
-        mcmc.run(rng_inf, x_train, y_train)
+def test_bart_regression_feature_importance():
+    from numpyro.infer import MCMC, NUTS, DiscreteHMCGibbs, Predictive
 
-        predictive = Predictive(model, mcmc.get_samples())
-        samples = predictive(rng_key, x_train)
+    rng_key = jax.random.PRNGKey(42)
+    rng_key, rng_cov1, rng_cov2, rng_obs, rng_inf = jax.random.split(rng_key, 5)
 
-        preds = jnp.mean(samples["obs"], axis=0)
+    n_samples = 50
+    x_data = jnp.stack(
+        [
+            jax.random.normal(rng_cov1, (n_samples,)),
+            jax.random.normal(rng_cov2, (n_samples,)),
+        ],
+        axis=1,
+    )
+    y_true = jnp.sin(x_data[:, 0] * jnp.pi)
+    y_obs = y_true + 0.1 * jax.random.normal(rng_obs, shape=y_true.shape)
 
-        mae = jnp.mean(jnp.abs(preds - y_obs))
-        self.assertTrue(
-            mae < 0.3, f"Mean Absolute Error should be < 0.3, but was {mae:.4f}"
+    x_train = x_data
+    y_train = y_obs
+
+    def model(x, y=None):
+        bart = BARTRegression(
+            "bart", n_covs=x.shape[1], n_trees=20, max_depth=2, scale=1.0
         )
+        mu = bart(x)
+        with numpyro.plate("data", x.shape[0]):
+            numpyro.sample("obs", dist.Normal(mu, 0.1), obs=y)  # type: ignore
 
+    kernel = DiscreteHMCGibbs(NUTS(model))
+    mcmc = MCMC(kernel, num_warmup=500, num_samples=500)
+    mcmc.run(rng_inf, x_train, y_train)
 
-if __name__ == "__main__":
-    unittest.main()
+    predictive = Predictive(model, mcmc.get_samples())
+    samples = predictive(rng_key, x_train)
+
+    preds = jnp.mean(samples["obs"], axis=0)
+
+    mae = jnp.mean(jnp.abs(preds - y_obs))
+    assert mae < 0.3, f"Mean Absolute Error should be < 0.3, but was {mae:.4f}"

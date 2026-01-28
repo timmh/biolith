@@ -1,4 +1,3 @@
-import unittest
 from typing import Optional, Type
 
 import jax
@@ -6,10 +5,11 @@ import jax.numpy as jnp
 import numpy as np
 import numpyro
 import numpyro.distributions as dist
+import pytest
 
 from biolith.regression import AbstractRegression, LinearRegression
 from biolith.utils.distributions import RightTruncatedPoisson
-from biolith.utils.modeling import mask_missing_obs
+from biolith.utils.modeling import flatten_covariates, mask_missing_obs, reshape_predictions
 from biolith.utils.spatial import sample_spatial_effects, simulate_spatial_effects
 
 
@@ -21,6 +21,7 @@ def occu_rn(
     false_positives_constant: bool = False,
     max_abundance: int = 100,
     obs: Optional[jnp.ndarray] = None,
+    n_species: int = 1,
     prior_beta: dist.Distribution = dist.Normal(),
     prior_alpha: dist.Distribution = dist.Normal(),
     regressor_abu: Type[AbstractRegression] = LinearRegression,
@@ -56,7 +57,9 @@ def occu_rn(
     max_abundance : int
         Maximum abundance cutoff for the Poisson distribution.
     obs : jnp.ndarray, optional
-        Observation matrix of shape (n_sites, n_periods, n_replicates) or None.
+        Observation matrix of shape (n_species, n_sites, n_periods, n_replicates) or None.
+    n_species : int
+        Number of species. Used when ``obs`` is None.
     prior_beta : numpyro.distributions.Distribution
         Prior distribution for the site-level regression coefficients.
     prior_alpha : numpyro.distributions.Distribution
@@ -92,6 +95,9 @@ def occu_rn(
     """
 
     # Check input data
+    assert (
+        obs is None or obs.ndim == 4
+    ), "obs must be None or of shape (n_species, n_sites, n_periods, n_replicates)"
     assert site_covs.ndim == 2, "site_covs must be (n_sites, n_site_covs)"
     assert (
         obs_covs.ndim == 4
@@ -102,6 +108,8 @@ def occu_rn(
     n_replicates = obs_covs.shape[2]
     n_site_covs = site_covs.shape[1]
     n_obs_covs = obs_covs.shape[3]
+    if obs is not None:
+        n_species = obs.shape[0]
 
     # # TODO: re-enable
     # if obs is not None:
@@ -112,7 +120,7 @@ def occu_rn(
     obs_mask = jnp.isnan(obs_covs).any(axis=-1) | jnp.isnan(site_covs).any(axis=-1)[
         :, None, None
     ]
-    obs = jnp.where(obs_mask, jnp.nan, obs) if obs is not None else None
+    obs = jnp.where(obs_mask[None, ...], jnp.nan, obs) if obs is not None else None
     obs_covs = jnp.nan_to_num(obs_covs)
     site_covs = jnp.nan_to_num(site_covs)
 
@@ -123,10 +131,6 @@ def occu_rn(
         if false_positives_constant
         else 0
     )
-
-    # Abundance and detection regression models
-    reg_abu = regressor_abu("beta", n_site_covs, prior=prior_beta)
-    reg_det = regressor_det("alpha", n_obs_covs, prior=prior_alpha)
 
     if coords is not None:
         w = sample_spatial_effects(
@@ -147,54 +151,70 @@ def occu_rn(
     # Transpose in order to fit NumPyro's plate structure
     site_covs = site_covs.transpose((1, 0))
     obs_covs = obs_covs.transpose((3, 2, 1, 0))
-    obs = obs.transpose((2, 1, 0)) if obs is not None else None
+    obs = obs.transpose((3, 2, 1, 0)) if obs is not None else None
+    site_covs_flat, site_shape = flatten_covariates(site_covs)
+    obs_covs_flat, obs_shape = flatten_covariates(obs_covs)
 
-    with numpyro.plate("site", n_sites, dim=-1):
+    with numpyro.plate("species", n_species, dim=-1):
 
-        # Site-level random effects
-        if site_random_effects:
-            site_re_abu = numpyro.sample("site_re_abu", dist.Normal(0, site_re_sd))  # type: ignore
-            site_re_det = numpyro.sample("site_re_det", dist.Normal(0, site_re_sd))  # type: ignore
-        else:
-            site_re_abu = 0.0
-            site_re_det = 0.0
+        # Abundance and detection regression models
+        reg_abu = regressor_abu("beta", n_site_covs, prior=prior_beta)
+        reg_det = regressor_det("alpha", n_obs_covs, prior=prior_alpha)
 
-        abu_linear = reg_abu(site_covs) + w + site_re_abu
+        with numpyro.plate("site", n_sites, dim=-2):
 
-        with numpyro.plate("period", n_periods, dim=-2):
+            # Site-level random effects
+            if site_random_effects:
+                site_re_abu = numpyro.sample("site_re_abu", dist.Normal(0, site_re_sd))  # type: ignore
+                site_re_det = numpyro.sample("site_re_det", dist.Normal(0, site_re_sd))  # type: ignore
+            else:
+                site_re_abu = 0.0
+                site_re_det = 0.0
 
-            # Abundance process (note: this model uses abundance instead of occupancy)
-            abundance = numpyro.deterministic("abundance", jnp.exp(abu_linear))
-
-            N_i = numpyro.sample(
-                "N_i",
-                RightTruncatedPoisson(abundance, max_cutoff=max_abundance),  # type: ignore
-                infer={"enumerate": "parallel"},
+            abu_linear = (
+                reshape_predictions(reg_abu(site_covs_flat), site_shape)
+                + w[:, None]
+                + site_re_abu
             )
 
-            with numpyro.plate("replicate", n_replicates, dim=-3):
+            with numpyro.plate("period", n_periods, dim=-3):
 
-                # Observation-level random effects
-                if obs_random_effects:
-                    obs_re = numpyro.sample("obs_re", dist.Normal(0, obs_re_sd))  # type: ignore
-                else:
-                    obs_re = 0.0
+                # Abundance process (note: this model uses abundance instead of occupancy)
+                abundance = numpyro.deterministic("abundance", jnp.exp(abu_linear))
 
-                # Detection process
-                r_it = numpyro.deterministic(
-                    "prob_detection",
-                    jax.nn.sigmoid(reg_det(obs_covs) + site_re_det + obs_re),
+                N_i = numpyro.sample(
+                    "N_i",
+                    RightTruncatedPoisson(abundance, max_cutoff=max_abundance),  # type: ignore
+                    infer={"enumerate": "parallel"},
                 )
-                p_it = 1.0 - (1.0 - r_it) ** N_i[None, :, :]  # type: ignore
 
-                with mask_missing_obs(obs):
-                    numpyro.sample(
-                        "y",
-                        dist.Bernoulli(
-                            1 - (1 - p_it) * (1 - prob_fp_constant)
-                        ),  # type: ignore
-                        obs=obs,
+                with numpyro.plate("replicate", n_replicates, dim=-4):
+
+                    # Observation-level random effects
+                    if obs_random_effects:
+                        obs_re = numpyro.sample("obs_re", dist.Normal(0, obs_re_sd))  # type: ignore
+                    else:
+                        obs_re = 0.0
+
+                    # Detection process
+                    r_it = numpyro.deterministic(
+                        "prob_detection",
+                        jax.nn.sigmoid(
+                            reshape_predictions(reg_det(obs_covs_flat), obs_shape)
+                            + site_re_det
+                            + obs_re
+                        ),
                     )
+                    p_it = 1.0 - (1.0 - r_it) ** N_i[None, ...]  # type: ignore
+
+                    with mask_missing_obs(obs):
+                        numpyro.sample(
+                            "y",
+                            dist.Bernoulli(
+                                1 - (1 - p_it) * (1 - prob_fp_constant)
+                            ),  # type: ignore
+                            obs=obs,
+                        )
 
 
 def simulate_rn(
@@ -202,6 +222,7 @@ def simulate_rn(
     n_obs_covs: int = 1,
     n_sites: int = 100,
     n_periods: int = 1,
+    n_species: int = 1,
     deployment_days_per_site: int = 365,
     session_duration: int = 7,
     prob_fp: float = 0.0,
@@ -246,10 +267,10 @@ def simulate_rn(
 
         # Generate intercept and slopes
         beta = rng.normal(
-            size=n_site_covs + 1
+            size=(n_species, n_site_covs + 1)
         )  # intercept and slopes for occupancy logistic regression
         alpha = rng.normal(
-            size=n_obs_covs + 1
+            size=(n_species, n_obs_covs + 1)
         )  # intercept and slopes for detection logistic regression
 
         # Generate occupancy and site-level covariates
@@ -260,14 +281,12 @@ def simulate_rn(
         else:
             w, ell = np.zeros(n_sites), 0.0
         abundance = np.exp(
-            beta[0].repeat(n_sites)
-            + np.sum(
-                [beta[i + 1] * site_covs[..., i] for i in range(n_site_covs)], axis=0
-            )
-            + w
+            beta[:, 0][:, None]
+            + np.tensordot(beta[:, 1:], site_covs, axes=([1], [1]))
+            + w[None, :]
         )
         N_i = rng.poisson(
-            abundance, size=(n_periods, n_sites)
+            abundance[:, None, :], size=(n_species, n_periods, n_sites)
         )  # matrix of latent abundance for each site and period
 
         # Generate detection data
@@ -279,26 +298,25 @@ def simulate_rn(
             1
             + np.exp(
                 -(
-                    alpha[0]
-                    + np.sum(
-                        [alpha[i + 1] * obs_covs[..., i] for i in range(n_obs_covs)],
-                        axis=0,
-                    )
+                    alpha[:, 0][:, None, None, None]
+                    + np.tensordot(alpha[:, 1:], obs_covs, axes=([1], [3]))
                 )
             )
         )
 
         # Create matrix of detections
-        obs = np.zeros((n_sites, n_periods, n_replicates))
+        obs = np.zeros((n_species, n_sites, n_periods, n_replicates))
 
-        for i in range(n_sites):
-            # According to the Royle model in unmarked, false positives are generated only if the site is unoccupied
-            # Note this is different than how we think about false positives being a random occurrence per image.
-            # For now, this is generating positive/negative per time period, which is different than per image.
-            p_it = 1.0 - (1.0 - r_it[i, :, :]) ** N_i[:, i][:, None]
-            obs[i, :, :] = rng.binomial(
-                n=1, p=1 - (1 - p_it) * (1 - prob_fp), size=(n_periods, n_replicates)
-            )
+        # According to the Royle model in unmarked, false positives are generated only if the site is unoccupied
+        # Note this is different than how we think about false positives being a random occurrence per image.
+        # For now, this is generating positive/negative per time period, which is different than per image.
+        N_i_site = N_i.transpose(0, 2, 1)
+        p_it = 1.0 - (1.0 - r_it) ** N_i_site[..., None]
+        obs = rng.binomial(
+            n=1,
+            p=1 - (1 - p_it) * (1 - prob_fp),
+            size=(n_species, n_sites, n_periods, n_replicates),
+        )
 
         # Convert counts into observed occupancy
         obs = (obs >= 1) * 1.0
@@ -335,162 +353,173 @@ def simulate_rn(
     )
 
 
-class TestOccuRN(unittest.TestCase):
 
-    def test_occu(self):
-        data, true_params = simulate_rn(simulate_missing=True)
+def test_occu():
+    data, true_params = simulate_rn(simulate_missing=True)
 
-        from biolith.utils import fit
+    from biolith.utils import fit
 
-        results = fit(occu_rn, **data, timeout=600)
+    results = fit(occu_rn, **data, timeout=600)
 
-        self.assertTrue(
-            np.allclose(
-                results.samples["abundance"].mean(),
-                true_params["abundance"].mean(),
-                rtol=0.1,
-            )
+    assert (
+        np.allclose(
+            results.samples["abundance"].mean(),
+            true_params["abundance"].mean(),
+            rtol=0.1,
         )
-        self.assertTrue(
-            np.allclose(
-                [
-                    results.samples[k].mean()
-                    for k in [f"cov_state_{i}" for i in range(len(true_params["beta"]))]
-                ],
-                true_params["beta"],
-                atol=0.5,
-            )
+    )
+    assert (
+        np.allclose(
+            [
+                results.samples[k].mean()
+                for k in [
+                    f"cov_state_{i}"
+                    for i in range(true_params["beta"].shape[1])
+                ]
+            ],
+            true_params["beta"].mean(axis=0),
+            atol=0.5,
         )
-        self.assertTrue(
-            np.allclose(
-                [
-                    results.samples[k].mean()
-                    for k in [f"cov_det_{i}" for i in range(len(true_params["alpha"]))]
-                ],
-                true_params["alpha"],
-                atol=0.5,
-            )
+    )
+    assert (
+        np.allclose(
+            [
+                results.samples[k].mean()
+                for k in [
+                    f"cov_det_{i}"
+                    for i in range(true_params["alpha"].shape[1])
+                ]
+            ],
+            true_params["alpha"].mean(axis=0),
+            atol=0.5,
         )
+    )
 
-    def test_occu_multi_season(self):
-        data, true_params = simulate_rn(simulate_missing=True, n_periods=3)
+def test_occu_multi_season():
+    data, true_params = simulate_rn(simulate_missing=True, n_periods=3)
 
-        from biolith.utils import fit
+    from biolith.utils import fit
 
-        results = fit(
-            occu_rn,
-            **data,
-            num_chains=1,
-            num_samples=300,
-            num_warmup=300,
-            timeout=600,
+    results = fit(
+        occu_rn,
+        **data,
+        num_chains=1,
+        num_samples=300,
+        num_warmup=300,
+        timeout=600,
+    )
+
+    assert (
+        np.allclose(
+            results.samples["abundance"].mean(),
+            true_params["abundance"].mean(),
+            rtol=0.2,
         )
+    )
 
-        self.assertTrue(
-            np.allclose(
-                results.samples["abundance"].mean(),
-                true_params["abundance"].mean(),
-                rtol=0.2,
-            )
+def test_occu_multi_species():
+    data, _ = simulate_rn(simulate_missing=True, n_species=2, n_sites=30)
+
+    from biolith.utils import fit
+
+    results = fit(occu_rn, **data, num_chains=1, num_samples=200, timeout=600)
+
+    assert results.samples["abundance"].shape[-1] == 2
+
+# TODO: fix this test
+@pytest.mark.skip(reason="Skipping test for spatial model")
+def test_occu_spatial():
+    data, true_params = simulate_rn(simulate_missing=True, spatial=True)
+
+    from biolith.utils import fit
+
+    results = fit(occu_rn, **data, timeout=600)
+
+    assert (
+        np.allclose(
+            results.samples["abundance"].mean(),
+            true_params["abundance"].mean(),
+            rtol=0.1,
         )
+    )
+    assert (
+        np.allclose(results.samples["gp_sd"].mean(), true_params["gp_sd"], atol=1.0)
+    )
+    assert (
+        np.allclose(results.samples["gp_l"].mean(), true_params["gp_l"], atol=0.5)
+    )
 
-    # TODO: fix this test
-    @unittest.skip("Skipping test for spatial model")
-    def test_occu_spatial(self):
-        data, true_params = simulate_rn(simulate_missing=True, spatial=True)
+def test_site_random_effects():
+    data, true_params = simulate_rn(simulate_missing=True)
 
-        from biolith.utils import fit
+    from biolith.utils import fit
 
-        results = fit(occu_rn, **data, timeout=600)
+    results = fit(
+        occu_rn,
+        **data,
+        site_random_effects=True,
+        num_chains=1,
+        num_samples=500,
+        timeout=600,
+    )
 
-        self.assertTrue(
-            np.allclose(
-                results.samples["abundance"].mean(),
-                true_params["abundance"].mean(),
-                rtol=0.1,
-            )
+    assert ("site_re_sd" in results.samples)
+    assert ("site_re_abu" in results.samples)
+    assert ("site_re_det" in results.samples)
+    assert (results.samples["site_re_sd"].mean() > 0)
+    assert (
+        np.allclose(
+            results.samples["abundance"].mean(),
+            true_params["abundance"].mean(),
+            rtol=0.2,
         )
-        self.assertTrue(
-            np.allclose(results.samples["gp_sd"].mean(), true_params["gp_sd"], atol=1.0)
+    )
+
+def test_obs_random_effects():
+    data, true_params = simulate_rn(simulate_missing=True)
+
+    from biolith.utils import fit
+
+    results = fit(
+        occu_rn,
+        **data,
+        obs_random_effects=True,
+        num_chains=1,
+        num_samples=500,
+        timeout=600,
+    )
+
+    assert ("obs_re_sd" in results.samples)
+    assert ("obs_re" in results.samples)
+    assert (results.samples["obs_re_sd"].mean() > 0)
+    assert (
+        np.allclose(
+            results.samples["abundance"].mean(),
+            true_params["abundance"].mean(),
+            rtol=0.2,
         )
-        self.assertTrue(
-            np.allclose(results.samples["gp_l"].mean(), true_params["gp_l"], atol=0.5)
-        )
+    )
 
-    def test_site_random_effects(self):
-        data, true_params = simulate_rn(simulate_missing=True)
+def test_combined_random_effects():
+    data, _ = simulate_rn(simulate_missing=True)
 
-        from biolith.utils import fit
+    from biolith.utils import fit
 
-        results = fit(
-            occu_rn,
-            **data,
-            site_random_effects=True,
-            num_chains=1,
-            num_samples=500,
-            timeout=600,
-        )
+    # this is relatively slow, so we use fewer samples and don't test recovering the true params
+    results = fit(
+        occu_rn,
+        **data,
+        site_random_effects=True,
+        obs_random_effects=True,
+        num_chains=1,
+        num_warmup=10,
+        num_samples=10,
+        timeout=600,
+    )
 
-        self.assertTrue("site_re_sd" in results.samples)
-        self.assertTrue("site_re_abu" in results.samples)
-        self.assertTrue("site_re_det" in results.samples)
-        self.assertTrue(results.samples["site_re_sd"].mean() > 0)
-        self.assertTrue(
-            np.allclose(
-                results.samples["abundance"].mean(),
-                true_params["abundance"].mean(),
-                rtol=0.2,
-            )
-        )
+    assert ("site_re_sd" in results.samples)
+    assert ("site_re_abu" in results.samples)
+    assert ("site_re_det" in results.samples)
+    assert ("obs_re_sd" in results.samples)
+    assert ("obs_re" in results.samples)
 
-    def test_obs_random_effects(self):
-        data, true_params = simulate_rn(simulate_missing=True)
-
-        from biolith.utils import fit
-
-        results = fit(
-            occu_rn,
-            **data,
-            obs_random_effects=True,
-            num_chains=1,
-            num_samples=500,
-            timeout=600,
-        )
-
-        self.assertTrue("obs_re_sd" in results.samples)
-        self.assertTrue("obs_re" in results.samples)
-        self.assertTrue(results.samples["obs_re_sd"].mean() > 0)
-        self.assertTrue(
-            np.allclose(
-                results.samples["abundance"].mean(),
-                true_params["abundance"].mean(),
-                rtol=0.2,
-            )
-        )
-
-    def test_combined_random_effects(self):
-        data, _ = simulate_rn(simulate_missing=True)
-
-        from biolith.utils import fit
-
-        # this is relatively slow, so we use fewer samples and don't test recovering the true params
-        results = fit(
-            occu_rn,
-            **data,
-            site_random_effects=True,
-            obs_random_effects=True,
-            num_chains=1,
-            num_warmup=10,
-            num_samples=10,
-            timeout=600,
-        )
-
-        self.assertTrue("site_re_sd" in results.samples)
-        self.assertTrue("site_re_abu" in results.samples)
-        self.assertTrue("site_re_det" in results.samples)
-        self.assertTrue("obs_re_sd" in results.samples)
-        self.assertTrue("obs_re" in results.samples)
-
-
-if __name__ == "__main__":
-    unittest.main()

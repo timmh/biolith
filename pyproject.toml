@@ -51,3 +51,6 @@ Source = "https://github.com/timmh/biolith"
 
 [tool.setuptools]
 packages = {find = {}}
+
+[tool.pytest.ini_options]
+python_files = ["*.py"]
