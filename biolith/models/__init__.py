@@ -2,6 +2,7 @@ from .occu import occu, simulate
 from .occu_cop import occu_cop, simulate_cop
 from .occu_cs import occu_cs, simulate_cs
 from .occu_rn import occu_rn, simulate_rn
+from .nmixture import nmixture, simulate_nmixture
 
 __all__ = [
     "occu",
@@ -12,4 +13,6 @@ __all__ = [
     "simulate_cop",
     "occu_rn",
     "simulate_rn",
+    "nmixture",
+    "simulate_nmixture",
 ]
