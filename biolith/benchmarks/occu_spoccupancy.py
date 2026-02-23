@@ -9,7 +9,6 @@ import time
 import warnings
 from typing import Dict, List, Tuple
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
@@ -340,6 +339,13 @@ def plot_benchmark_results(
     plot_relative : bool
         If True, plot the speedup ratio (spOccupancy time / biolith time).
     """
+
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print("matplotlib is not installed. Skipping plotting.")
+        return
+
     if plot_relative:
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
     else:

@@ -653,8 +653,8 @@ def test_vs_spoccupancy():
     spOccupancy_r = importr("spOccupancy")
 
     # Prepare data for R
-    # Observations (y) - can have NaNs, spOccupancy handles them.
-    y_py = data["obs"][:, 0, :].copy()  # Shape: (n_sites, time_periods)
+    # Observations (y): use first species and first period -> shape (n_sites, n_replicates).
+    y_py = data["obs"][0, :, 0, :].copy()
     y_r = numpy2ri_module.py2rpy(y_py)  # Converts to R matrix, np.nan to R NA
 
     # Occupancy covariates (site-level)
@@ -682,8 +682,11 @@ def test_vs_spoccupancy():
     # Replace NaNs with 0.
     det_covs_py = np.nan_to_num(
         data["obs_covs"][:, 0, :, :].copy()
-    )  # Shape: (n_sites, time_periods, n_obs_covs)
-    _, time_periods, n_obs_covs = det_covs_py.shape
+    )  # Shape: (n_sites, n_replicates, n_obs_covs)
+    _, n_replicates, n_obs_covs = det_covs_py.shape
+    assert y_py.shape[1] == n_replicates, (
+        f"number of replicates in y ({y_py.shape[1]}) must match det.covs ({n_replicates})"
+    )
 
     det_covs_r_elements = {}  # For the R named list
     det_formula_parts = []

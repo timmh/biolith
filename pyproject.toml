@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "biolith"
-version = "0.0.15"
+version = "0.1.0"
 description = "Bayesian Ecological Modeling in Python"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -34,12 +34,15 @@ cuda13 = ["jax[cuda13]>=0.5.0"]
 tpu = ["jax[tpu]>=0.5.0"]
 rocm = ["jax[rocm]>=0.5.0"]
 
+extras = ["matplotlib", "scikit-learn", "rpy2"]
+
 dev = [
     "black",
     "isort",
     "docformatter",
     "pylint",
     "pyright",
+    "pytest",
     "sphinx",
     "sphinx_rtd_theme",
     "myst_parser",

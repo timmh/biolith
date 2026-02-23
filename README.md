@@ -70,7 +70,7 @@ Make sure to install development dependencies, e.g. using:
 pip install -e ".[dev]"
 ```
 
-Run `python -m unittest` to run unit tests.
+Run `pytest` to run unit tests.
 
 Run `scripts/format.sh` to format the codebase. Execute `scripts/check.sh` to run
 isort, docformatter and black in check mode along with pylint and pyright.

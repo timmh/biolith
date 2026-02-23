@@ -20,7 +20,7 @@ jobs:
     - uses: actions/checkout@v4
     - name: Set up R
       run: |
-        sudo apt-get install -y r-base r-base-dev libcurl4-openssl-dev libssl-dev libxml2-dev libtirpc-dev
+        sudo apt-get update && sudo apt-get install -y r-base r-base-dev libcurl4-openssl-dev libssl-dev libxml2-dev libtirpc-dev
     - name: Install R dependencies
       run: |
         sudo R -e "install.packages('spOccupancy', repos='https://cloud.r-project.org')"
@@ -30,8 +30,7 @@ jobs:
         python-version: ${{ matrix.python-version }}
     - name: Install Python dependencies
       run: |
-        pip install -e .[dev]
-        pip install rpy2  # for comparing to R packages
+        pip install -e .[dev,extras]
     - name: Test with unittest
       run: |
-        python -m unittest -vvv
+        pytest
