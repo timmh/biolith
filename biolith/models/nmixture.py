@@ -8,7 +8,11 @@ import numpyro
 import numpyro.distributions as dist
 
 from biolith.regression import AbstractRegression, LinearRegression
-from biolith.utils.modeling import flatten_covariates, mask_missing_obs, reshape_predictions
+from biolith.utils.modeling import (
+    flatten_covariates,
+    mask_missing_obs,
+    reshape_predictions,
+)
 from biolith.utils.spatial import sample_spatial_effects, simulate_spatial_effects
 
 
@@ -113,9 +117,10 @@ def nmixture(
         assert n_replicates == obs.shape[3], "obs must have n_replicates columns"
 
     # Mask observations where covariates are missing
-    obs_mask = jnp.isnan(obs_covs).any(axis=-1) | jnp.isnan(site_covs).any(axis=-1)[
-        :, None, None
-    ]
+    obs_mask = (
+        jnp.isnan(obs_covs).any(axis=-1)
+        | jnp.isnan(site_covs).any(axis=-1)[:, None, None]
+    )
     obs = jnp.where(obs_mask[None, ...], jnp.nan, obs) if obs is not None else None
     obs_covs = jnp.nan_to_num(obs_covs)
     site_covs = jnp.nan_to_num(site_covs)
@@ -290,9 +295,7 @@ def simulate_nmixture(
             + w[None, :]
             + site_re_abu
         )
-        N_i = rng.poisson(
-            abundance[:, None, :], size=(n_species, n_periods, n_sites)
-        )
+        N_i = rng.poisson(abundance[:, None, :], size=(n_species, n_periods, n_sites))
 
         # Generate detection data
         n_replicates = round(deployment_days_per_site / session_duration)
@@ -394,38 +397,26 @@ def test_nmixture():
         timeout=600,
     )
 
-    assert (
-        np.allclose(
-            results.samples["abundance"].mean(),
-            true_params["abundance"].mean(),
-            rtol=0.2,
-        )
+    assert np.allclose(
+        results.samples["abundance"].mean(),
+        true_params["abundance"].mean(),
+        rtol=0.2,
     )
-    assert (
-        np.allclose(
-            [
-                results.samples[k].mean()
-                for k in [
-                    f"cov_state_{i}"
-                    for i in range(true_params["beta"].shape[1])
-                ]
-            ],
-            true_params["beta"].mean(axis=0),
-            atol=0.5,
-        )
+    assert np.allclose(
+        [
+            results.samples[k].mean()
+            for k in [f"cov_state_{i}" for i in range(true_params["beta"].shape[1])]
+        ],
+        true_params["beta"].mean(axis=0),
+        atol=0.5,
     )
-    assert (
-        np.allclose(
-            [
-                results.samples[k].mean()
-                for k in [
-                    f"cov_det_{i}"
-                    for i in range(true_params["alpha"].shape[1])
-                ]
-            ],
-            true_params["alpha"].mean(axis=0),
-            atol=0.5,
-        )
+    assert np.allclose(
+        [
+            results.samples[k].mean()
+            for k in [f"cov_det_{i}" for i in range(true_params["alpha"].shape[1])]
+        ],
+        true_params["alpha"].mean(axis=0),
+        atol=0.5,
     )
 
 
@@ -453,12 +444,10 @@ def test_nmixture_multi_season():
         timeout=600,
     )
 
-    assert (
-        np.allclose(
-            results.samples["abundance"].mean(),
-            true_params["abundance"].mean(),
-            rtol=0.25,
-        )
+    assert np.allclose(
+        results.samples["abundance"].mean(),
+        true_params["abundance"].mean(),
+        rtol=0.25,
     )
 
 
@@ -513,17 +502,15 @@ def test_nmixture_spatial():
         timeout=600,
     )
 
-    assert (
-        np.allclose(
-            results.samples["abundance"].mean(),
-            true_params["abundance"].mean(),
-            rtol=0.25,
-        )
+    assert np.allclose(
+        results.samples["abundance"].mean(),
+        true_params["abundance"].mean(),
+        rtol=0.25,
     )
-    assert ("gp_sd" in results.samples)
-    assert ("gp_l" in results.samples)
-    assert (results.samples["gp_sd"].mean() > 0)
-    assert (results.samples["gp_l"].mean() > 0)
+    assert "gp_sd" in results.samples
+    assert "gp_l" in results.samples
+    assert results.samples["gp_sd"].mean() > 0
+    assert results.samples["gp_l"].mean() > 0
 
 
 def test_nmixture_site_random_effects():
@@ -552,16 +539,14 @@ def test_nmixture_site_random_effects():
         timeout=600,
     )
 
-    assert ("site_re_sd" in results.samples)
-    assert ("site_re_abu" in results.samples)
-    assert ("site_re_det" in results.samples)
-    assert (results.samples["site_re_sd"].mean() > 0)
-    assert (
-        np.allclose(
-            results.samples["abundance"].mean(),
-            true_params["abundance"].mean(),
-            rtol=0.25,
-        )
+    assert "site_re_sd" in results.samples
+    assert "site_re_abu" in results.samples
+    assert "site_re_det" in results.samples
+    assert results.samples["site_re_sd"].mean() > 0
+    assert np.allclose(
+        results.samples["abundance"].mean(),
+        true_params["abundance"].mean(),
+        rtol=0.25,
     )
 
 
@@ -588,15 +573,13 @@ def test_nmixture_obs_random_effects():
         timeout=600,
     )
 
-    assert ("obs_re_sd" in results.samples)
-    assert ("obs_re" in results.samples)
-    assert (results.samples["obs_re_sd"].mean() > 0)
-    assert (
-        np.allclose(
-            results.samples["abundance"].mean(),
-            true_params["abundance"].mean(),
-            rtol=0.25,
-        )
+    assert "obs_re_sd" in results.samples
+    assert "obs_re" in results.samples
+    assert results.samples["obs_re_sd"].mean() > 0
+    assert np.allclose(
+        results.samples["abundance"].mean(),
+        true_params["abundance"].mean(),
+        rtol=0.25,
     )
 
 
@@ -625,8 +608,8 @@ def test_nmixture_combined_random_effects():
         timeout=600,
     )
 
-    assert ("site_re_sd" in results.samples)
-    assert ("site_re_abu" in results.samples)
-    assert ("site_re_det" in results.samples)
-    assert ("obs_re_sd" in results.samples)
-    assert ("obs_re" in results.samples)
+    assert "site_re_sd" in results.samples
+    assert "site_re_abu" in results.samples
+    assert "site_re_det" in results.samples
+    assert "obs_re_sd" in results.samples
+    assert "obs_re" in results.samples

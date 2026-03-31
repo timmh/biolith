@@ -142,6 +142,6 @@ def test_deviance():
     d_manual = deviance_manual(posterior_samples, data)
 
     assert 0 < d < jnp.inf, "Deviance should be positive and finite."
-    assert jnp.allclose(d, d_manual, rtol=1e-3), (
-        "NumPyro deviance should match manually computed deviance."
-    )
+    assert jnp.allclose(
+        d, d_manual, rtol=1e-3
+    ), "NumPyro deviance should match manually computed deviance."

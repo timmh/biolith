@@ -1,6 +1,7 @@
+import math
+
 import jax
 import jax.numpy as jnp
-import math
 import numpyro
 from numpyro.distributions import Distribution, Normal
 
@@ -87,9 +88,9 @@ class MLPRegression(AbstractRegression):
 
             outputs = jax.vmap(lambda w, b: forward(x, w, b))(weights, biases)
             outputs = outputs.reshape(batch_shape + original_shape[:1])
-            perm = list(range(len(batch_shape), len(batch_shape) + len(original_shape[:1]))) + list(
-                range(len(batch_shape))
-            )
+            perm = list(
+                range(len(batch_shape), len(batch_shape) + len(original_shape[:1]))
+            ) + list(range(len(batch_shape)))
             return outputs.transpose(perm)
 
         for w, b in zip(self.weights[:-1], self.biases[:-1]):

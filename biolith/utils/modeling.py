@@ -1,5 +1,5 @@
-from contextlib import contextmanager
 import math
+from contextlib import contextmanager
 
 import jax.numpy as jnp
 from numpyro.handlers import mask
@@ -29,7 +29,8 @@ def flatten_covariates(covs: jnp.ndarray) -> tuple[jnp.ndarray, tuple[int, ...]]
 
 
 def reshape_predictions(preds: jnp.ndarray, obs_shape: tuple[int, ...]) -> jnp.ndarray:
-    """Reshape predictions from (n_obs, *batch_shape) back to (*obs_shape, *batch_shape)."""
+    """Reshape predictions from (n_obs, *batch_shape) back to (*obs_shape,
+    *batch_shape)."""
     batch_shape = preds.shape[1:] if preds.ndim > 1 else ()
     if preds.shape[0] != math.prod(obs_shape):
         raise ValueError(

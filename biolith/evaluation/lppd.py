@@ -118,6 +118,6 @@ def test_lppd():
     l_manual = lppd_manual(posterior_samples, data)
 
     assert -jnp.inf < l < 0, "LPPD should be negative and finite."
-    assert jnp.allclose(l, l_manual, rtol=1e-2), (
-        "NumPyro LPPD should match manually computed LPPD."
-    )
+    assert jnp.allclose(
+        l, l_manual, rtol=1e-2
+    ), "NumPyro LPPD should match manually computed LPPD."

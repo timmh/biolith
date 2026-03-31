@@ -58,9 +58,9 @@ class LinearRegression(AbstractRegression):
         obs_shape = (covs.shape[0],)
         linear = jnp.tensordot(slopes, covs, axes=([-1], [1]))
         if batch_shape:
-            perm = list(range(len(batch_shape), len(batch_shape) + len(obs_shape))) + list(
-                range(len(batch_shape))
-            )
+            perm = list(
+                range(len(batch_shape), len(batch_shape) + len(obs_shape))
+            ) + list(range(len(batch_shape)))
             linear = linear.transpose(perm)
             intercept = intercept.reshape((1,) * len(obs_shape) + batch_shape)
         return linear + intercept

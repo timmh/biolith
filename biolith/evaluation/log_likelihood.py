@@ -121,8 +121,8 @@ def test_log_likelihood():
     log_lik_per_obs = logsumexp(log_lik[:, valid_obs], axis=0) - jnp.log(
         log_lik.shape[0]
     )
-    log_lik_manual_per_obs = logsumexp(
-        log_lik_manual[:, valid_obs], axis=0
-    ) - jnp.log(log_lik_manual.shape[0])
+    log_lik_manual_per_obs = logsumexp(log_lik_manual[:, valid_obs], axis=0) - jnp.log(
+        log_lik_manual.shape[0]
+    )
 
     assert jnp.allclose(log_lik_per_obs, log_lik_manual_per_obs, rtol=1e-1)

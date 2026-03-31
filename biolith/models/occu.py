@@ -8,7 +8,11 @@ import numpyro.distributions as dist
 import pytest
 
 from biolith.regression import AbstractRegression, LinearRegression
-from biolith.utils.modeling import flatten_covariates, mask_missing_obs, reshape_predictions
+from biolith.utils.modeling import (
+    flatten_covariates,
+    mask_missing_obs,
+    reshape_predictions,
+)
 from biolith.utils.spatial import sample_spatial_effects, simulate_spatial_effects
 
 
@@ -129,9 +133,10 @@ def occu(
         assert n_replicates == obs.shape[3], "obs must have n_replicates columns"
 
     # Mask observations where covariates are missing
-    obs_mask = jnp.isnan(obs_covs).any(axis=-1) | jnp.isnan(site_covs).any(axis=-1)[
-        :, None, None
-    ]
+    obs_mask = (
+        jnp.isnan(obs_covs).any(axis=-1)
+        | jnp.isnan(site_covs).any(axis=-1)[:, None, None]
+    )
     obs = jnp.where(obs_mask[None, ...], jnp.nan, obs) if obs is not None else None
     obs_covs = jnp.nan_to_num(obs_covs)
     site_covs = jnp.nan_to_num(site_covs)
@@ -358,12 +363,9 @@ def simulate(
         prob_detection_fp = np.zeros((n_species, n_sites, n_periods, n_replicates))
 
         z_site = z.transpose(0, 2, 1)
-        prob_detection_fp = (
-            1
-            - (1 - (z_site[..., None] * prob_detection))
-            * (1 - prob_fp_constant)
-            * (1 - ((1 - z_site[..., None]) * prob_fp_unoccupied))
-        )
+        prob_detection_fp = 1 - (1 - (z_site[..., None] * prob_detection)) * (
+            1 - prob_fp_constant
+        ) * (1 - ((1 - z_site[..., None]) * prob_fp_unoccupied))
         obs = rng.binomial(
             n=1,
             p=prob_detection_fp,
@@ -428,7 +430,6 @@ def simulate(
     )
 
 
-
 def test_occu():
     data, true_params = simulate(simulate_missing=True)
 
@@ -436,37 +437,24 @@ def test_occu():
 
     results = fit(occu, **data, timeout=600)
 
-    assert (
-        np.allclose(
-            results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1
-        )
+    assert np.allclose(results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1)
+    assert np.allclose(
+        [
+            results.samples[k].mean()
+            for k in [f"cov_state_{i}" for i in range(true_params["beta"].shape[1])]
+        ],
+        true_params["beta"].mean(axis=0),
+        atol=0.5,
     )
-    assert (
-        np.allclose(
-            [
-                results.samples[k].mean()
-                for k in [
-                    f"cov_state_{i}"
-                    for i in range(true_params["beta"].shape[1])
-                ]
-            ],
-            true_params["beta"].mean(axis=0),
-            atol=0.5,
-        )
+    assert np.allclose(
+        [
+            results.samples[k].mean()
+            for k in [f"cov_det_{i}" for i in range(true_params["alpha"].shape[1])]
+        ],
+        true_params["alpha"].mean(axis=0),
+        atol=0.5,
     )
-    assert (
-        np.allclose(
-            [
-                results.samples[k].mean()
-                for k in [
-                    f"cov_det_{i}"
-                    for i in range(true_params["alpha"].shape[1])
-                ]
-            ],
-            true_params["alpha"].mean(axis=0),
-            atol=0.5,
-        )
-    )
+
 
 def test_occu_multi_season():
     data, true_params = simulate(simulate_missing=True, n_periods=3)
@@ -482,11 +470,10 @@ def test_occu_multi_season():
         timeout=600,
     )
 
-    assert (
-        np.allclose(
-            results.samples["psi"].mean(), true_params["z"].mean(), atol=0.15
-        )
+    assert np.allclose(
+        results.samples["psi"].mean(), true_params["z"].mean(), atol=0.15
     )
+
 
 def test_occu_multi_species():
     data, _ = simulate(simulate_missing=True, n_species=2, n_sites=30)
@@ -504,6 +491,7 @@ def test_occu_multi_species():
 
     assert results.samples["psi"].shape[-1] == 2
 
+
 def test_occu_fp_constant():
     prob_fp_constant = 0.1
     data, true_params = simulate(
@@ -514,42 +502,27 @@ def test_occu_fp_constant():
 
     results = fit(occu, **data, false_positives_constant=True, timeout=600)
 
-    assert (
-        np.allclose(
-            results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1
-        )
+    assert np.allclose(results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1)
+    assert np.allclose(
+        results.samples["prob_fp_constant"].mean(), prob_fp_constant, atol=0.1
     )
-    assert (
-        np.allclose(
-            results.samples["prob_fp_constant"].mean(), prob_fp_constant, atol=0.1
-        )
+    assert np.allclose(
+        [
+            results.samples[k].mean()
+            for k in [f"cov_state_{i}" for i in range(true_params["beta"].shape[1])]
+        ],
+        true_params["beta"].mean(axis=0),
+        atol=0.5,
     )
-    assert (
-        np.allclose(
-            [
-                results.samples[k].mean()
-                for k in [
-                    f"cov_state_{i}"
-                    for i in range(true_params["beta"].shape[1])
-                ]
-            ],
-            true_params["beta"].mean(axis=0),
-            atol=0.5,
-        )
+    assert np.allclose(
+        [
+            results.samples[k].mean()
+            for k in [f"cov_det_{i}" for i in range(true_params["alpha"].shape[1])]
+        ],
+        true_params["alpha"].mean(axis=0),
+        atol=0.5,
     )
-    assert (
-        np.allclose(
-            [
-                results.samples[k].mean()
-                for k in [
-                    f"cov_det_{i}"
-                    for i in range(true_params["alpha"].shape[1])
-                ]
-            ],
-            true_params["alpha"].mean(axis=0),
-            atol=0.5,
-        )
-    )
+
 
 # TODO: fix this test
 @pytest.mark.skip(reason="Skipping test for false positives at unoccupied sites")
@@ -563,44 +536,29 @@ def test_occu_fp_unoccupied():
 
     results = fit(occu, **data, false_positives_unoccupied=True, timeout=600)
 
-    assert (
-        np.allclose(
-            results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1
-        )
+    assert np.allclose(results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1)
+    assert np.allclose(
+        results.samples["prob_fp_unoccupied"].mean(),
+        prob_fp_unoccupied,
+        atol=0.1,
     )
-    assert (
-        np.allclose(
-            results.samples["prob_fp_unoccupied"].mean(),
-            prob_fp_unoccupied,
-            atol=0.1,
-        )
+    assert np.allclose(
+        [
+            results.samples[k].mean()
+            for k in [f"cov_state_{i}" for i in range(true_params["beta"].shape[1])]
+        ],
+        true_params["beta"].mean(axis=0),
+        atol=0.5,
     )
-    assert (
-        np.allclose(
-            [
-                results.samples[k].mean()
-                for k in [
-                    f"cov_state_{i}"
-                    for i in range(true_params["beta"].shape[1])
-                ]
-            ],
-            true_params["beta"].mean(axis=0),
-            atol=0.5,
-        )
+    assert np.allclose(
+        [
+            results.samples[k].mean()
+            for k in [f"cov_det_{i}" for i in range(true_params["alpha"].shape[1])]
+        ],
+        true_params["alpha"].mean(axis=0),
+        atol=0.5,
     )
-    assert (
-        np.allclose(
-            [
-                results.samples[k].mean()
-                for k in [
-                    f"cov_det_{i}"
-                    for i in range(true_params["alpha"].shape[1])
-                ]
-            ],
-            true_params["alpha"].mean(axis=0),
-            atol=0.5,
-        )
-    )
+
 
 def test_occu_spatial():
     data, true_params = simulate(simulate_missing=True, spatial=True)
@@ -609,17 +567,10 @@ def test_occu_spatial():
 
     results = fit(occu, **data, timeout=600)
 
-    assert (
-        np.allclose(
-            results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1
-        )
-    )
-    assert (
-        np.allclose(results.samples["gp_sd"].mean(), true_params["gp_sd"], atol=1.0)
-    )
-    assert (
-        np.allclose(results.samples["gp_l"].mean(), true_params["gp_l"], atol=0.5)
-    )
+    assert np.allclose(results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1)
+    assert np.allclose(results.samples["gp_sd"].mean(), true_params["gp_sd"], atol=1.0)
+    assert np.allclose(results.samples["gp_l"].mean(), true_params["gp_l"], atol=0.5)
+
 
 def test_vs_spoccupancy():
     data, true_params = simulate(simulate_missing=True)
@@ -669,9 +620,7 @@ def test_vs_spoccupancy():
     if n_site_covs > 0:
         for i in range(n_site_covs):
             cov_name = f"site_cov{i+1}"
-            occ_covs_r_elements[cov_name] = numpy2ri_module.py2rpy(
-                occ_covs_py[:, i]
-            )
+            occ_covs_r_elements[cov_name] = numpy2ri_module.py2rpy(occ_covs_py[:, i])
             occ_formula_parts.append(cov_name)
     occ_covs_r_df = ro.DataFrame(occ_covs_r_elements)  # R DataFrame
     occ_formula_str = (
@@ -684,9 +633,9 @@ def test_vs_spoccupancy():
         data["obs_covs"][:, 0, :, :].copy()
     )  # Shape: (n_sites, n_replicates, n_obs_covs)
     _, n_replicates, n_obs_covs = det_covs_py.shape
-    assert y_py.shape[1] == n_replicates, (
-        f"number of replicates in y ({y_py.shape[1]}) must match det.covs ({n_replicates})"
-    )
+    assert (
+        y_py.shape[1] == n_replicates
+    ), f"number of replicates in y ({y_py.shape[1]}) must match det.covs ({n_replicates})"
 
     det_covs_r_elements = {}  # For the R named list
     det_formula_parts = []
@@ -694,9 +643,7 @@ def test_vs_spoccupancy():
         for i in range(n_obs_covs):
             cov_name = f"obs_cov{i+1}"
             # Convert each (n_sites, time_periods) slice to an R matrix
-            det_covs_r_elements[cov_name] = numpy2ri_module.py2rpy(
-                det_covs_py[:, :, i]
-            )
+            det_covs_r_elements[cov_name] = numpy2ri_module.py2rpy(det_covs_py[:, :, i])
             det_formula_parts.append(cov_name)
     det_covs_r_list = ro.ListVector(det_covs_r_elements)  # R named list
     det_formula_str = (
@@ -737,47 +684,32 @@ def test_vs_spoccupancy():
         n_samples=num_samples,
     )
 
-    beta_samples_r_matrix = numpy2ri_module.rpy2py(
-        pg_occ_results_r.rx2("beta.samples")
-    )
+    beta_samples_r_matrix = numpy2ri_module.rpy2py(pg_occ_results_r.rx2("beta.samples"))
     alpha_samples_r_matrix = numpy2ri_module.rpy2py(
         pg_occ_results_r.rx2("alpha.samples")
     )
-    psi_samples_r_matrix = numpy2ri_module.rpy2py(
-        pg_occ_results_r.rx2("psi.samples")
+    psi_samples_r_matrix = numpy2ri_module.rpy2py(pg_occ_results_r.rx2("psi.samples"))
+
+    assert np.allclose(
+        psi_samples_r_matrix.mean(), results.samples["psi"].mean(), atol=0.1
+    )
+    assert np.allclose(
+        beta_samples_r_matrix.mean(axis=0),
+        [
+            results.samples[k].mean()
+            for k in [f"cov_state_{i}" for i in range(true_params["beta"].shape[1])]
+        ],
+        atol=0.5,
+    )
+    assert np.allclose(
+        alpha_samples_r_matrix.mean(axis=0),
+        [
+            results.samples[k].mean()
+            for k in [f"cov_det_{i}" for i in range(true_params["alpha"].shape[1])]
+        ],
+        atol=0.5,
     )
 
-    assert (
-        np.allclose(
-            psi_samples_r_matrix.mean(), results.samples["psi"].mean(), atol=0.1
-        )
-    )
-    assert (
-        np.allclose(
-            beta_samples_r_matrix.mean(axis=0),
-            [
-                results.samples[k].mean()
-                for k in [
-                    f"cov_state_{i}"
-                    for i in range(true_params["beta"].shape[1])
-                ]
-            ],
-            atol=0.5,
-        )
-    )
-    assert (
-        np.allclose(
-            alpha_samples_r_matrix.mean(axis=0),
-            [
-                results.samples[k].mean()
-                for k in [
-                    f"cov_det_{i}"
-                    for i in range(true_params["alpha"].shape[1])
-                ]
-            ],
-            atol=0.5,
-        )
-    )
 
 def test_evaluation():
     data, _ = simulate(simulate_missing=True)
@@ -817,6 +749,7 @@ def test_evaluation():
     # Test diagnostics
     diagnostics(results.mcmc)
 
+
 def test_regression_methods():
     from biolith.regression import (
         BARTRegression,
@@ -828,14 +761,11 @@ def test_regression_methods():
     data, true_params = simulate(simulate_missing=True)
 
     for reg_class in [LinearRegression, MLPRegression, BARTRegression]:
-        results = fit(
-            occu, **data, regressor_occ=reg_class, num_chains=1, timeout=600
+        results = fit(occu, **data, regressor_occ=reg_class, num_chains=1, timeout=600)
+        assert np.allclose(
+            results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1
         )
-        assert (
-            np.allclose(
-                results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1
-            )
-        )
+
 
 def test_site_random_effects():
 
@@ -876,16 +806,15 @@ def test_site_random_effects():
     )
     l_re = lppd(occu, posterior_samples_re, **data)
 
-    assert (l_re >= 0.95 * l)
-    assert ("site_re_sd" in results_re.samples)
-    assert ("site_re_occ" in results_re.samples)
-    assert ("site_re_det" in results_re.samples)
-    assert (results_re.samples["site_re_sd"].mean() > 0)
-    assert (
-        np.allclose(
-            results_re.samples["psi"].mean(), true_params["z"].mean(), atol=0.15
-        )
+    assert l_re >= 0.95 * l
+    assert "site_re_sd" in results_re.samples
+    assert "site_re_occ" in results_re.samples
+    assert "site_re_det" in results_re.samples
+    assert results_re.samples["site_re_sd"].mean() > 0
+    assert np.allclose(
+        results_re.samples["psi"].mean(), true_params["z"].mean(), atol=0.15
     )
+
 
 def test_obs_random_effects():
     data, true_params = simulate(simulate_missing=True)
@@ -901,14 +830,13 @@ def test_obs_random_effects():
         timeout=600,
     )
 
-    assert ("obs_re_sd" in results.samples)
-    assert ("obs_re" in results.samples)
-    assert (results.samples["obs_re_sd"].mean() > 0)
-    assert (
-        np.allclose(
-            results.samples["psi"].mean(), true_params["z"].mean(), atol=0.15
-        )
+    assert "obs_re_sd" in results.samples
+    assert "obs_re" in results.samples
+    assert results.samples["obs_re_sd"].mean() > 0
+    assert np.allclose(
+        results.samples["psi"].mean(), true_params["z"].mean(), atol=0.15
     )
+
 
 def test_combined_random_effects():
     data, true_params = simulate(simulate_missing=True)
@@ -925,14 +853,11 @@ def test_combined_random_effects():
         timeout=600,
     )
 
-    assert ("site_re_sd" in results.samples)
-    assert ("site_re_occ" in results.samples)
-    assert ("site_re_det" in results.samples)
-    assert ("obs_re_sd" in results.samples)
-    assert ("obs_re" in results.samples)
-    assert (
-        np.allclose(
-            results.samples["psi"].mean(), true_params["z"].mean(), atol=0.15
-        )
+    assert "site_re_sd" in results.samples
+    assert "site_re_occ" in results.samples
+    assert "site_re_det" in results.samples
+    assert "obs_re_sd" in results.samples
+    assert "obs_re" in results.samples
+    assert np.allclose(
+        results.samples["psi"].mean(), true_params["z"].mean(), atol=0.15
     )
-

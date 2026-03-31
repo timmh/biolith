@@ -7,7 +7,11 @@ import numpyro
 import numpyro.distributions as dist
 
 from biolith.regression import AbstractRegression, LinearRegression
-from biolith.utils.modeling import flatten_covariates, mask_missing_obs, reshape_predictions
+from biolith.utils.modeling import (
+    flatten_covariates,
+    mask_missing_obs,
+    reshape_predictions,
+)
 from biolith.utils.spatial import sample_spatial_effects, simulate_spatial_effects
 
 
@@ -115,9 +119,10 @@ def occu_cs(
         assert n_replicates == obs.shape[3], "obs must have n_replicates columns"
 
     # Mask observations where covariates are missing
-    obs_mask = jnp.isnan(obs_covs).any(axis=-1) | jnp.isnan(site_covs).any(axis=-1)[
-        :, None, None
-    ]
+    obs_mask = (
+        jnp.isnan(obs_covs).any(axis=-1)
+        | jnp.isnan(site_covs).any(axis=-1)[:, None, None]
+    )
     obs = jnp.where(obs_mask[None, ...], jnp.nan, obs) if obs is not None else None
     obs_covs = jnp.nan_to_num(obs_covs)
     site_covs = jnp.nan_to_num(site_covs)
@@ -357,7 +362,6 @@ def simulate_cs(
     )
 
 
-
 def test_occu():
     data, true_params = simulate_cs(simulate_missing=True)
 
@@ -365,49 +369,28 @@ def test_occu():
 
     results = fit(occu_cs, **data, timeout=600)
 
-    assert (
-        np.allclose(
-            results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1
-        )
+    assert np.allclose(results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1)
+    assert np.allclose(
+        [
+            results.samples[k].mean()
+            for k in [f"cov_state_{i}" for i in range(true_params["beta"].shape[1])]
+        ],
+        true_params["beta"].mean(axis=0),
+        atol=0.5,
     )
-    assert (
-        np.allclose(
-            [
-                results.samples[k].mean()
-                for k in [
-                    f"cov_state_{i}"
-                    for i in range(true_params["beta"].shape[1])
-                ]
-            ],
-            true_params["beta"].mean(axis=0),
-            atol=0.5,
-        )
+    assert np.allclose(
+        [
+            results.samples[k].mean()
+            for k in [f"cov_det_{i}" for i in range(true_params["alpha"].shape[1])]
+        ],
+        true_params["alpha"].mean(axis=0),
+        atol=0.5,
     )
-    assert (
-        np.allclose(
-            [
-                results.samples[k].mean()
-                for k in [
-                    f"cov_det_{i}"
-                    for i in range(true_params["alpha"].shape[1])
-                ]
-            ],
-            true_params["alpha"].mean(axis=0),
-            atol=0.5,
-        )
-    )
-    assert (
-        np.allclose(results.samples["mu0"].mean(), true_params["mu0"], atol=1)
-    )
-    assert (
-        np.allclose(results.samples["mu1"].mean(), true_params["mu1"], atol=1)
-    )
-    assert (
-        np.allclose(results.samples["sigma0"].mean(), true_params["sigma0"], atol=1)
-    )
-    assert (
-        np.allclose(results.samples["sigma1"].mean(), true_params["sigma1"], atol=1)
-    )
+    assert np.allclose(results.samples["mu0"].mean(), true_params["mu0"], atol=1)
+    assert np.allclose(results.samples["mu1"].mean(), true_params["mu1"], atol=1)
+    assert np.allclose(results.samples["sigma0"].mean(), true_params["sigma0"], atol=1)
+    assert np.allclose(results.samples["sigma1"].mean(), true_params["sigma1"], atol=1)
+
 
 def test_occu_multi_season():
     data, true_params = simulate_cs(simulate_missing=True, n_periods=3)
@@ -423,11 +406,10 @@ def test_occu_multi_season():
         timeout=600,
     )
 
-    assert (
-        np.allclose(
-            results.samples["psi"].mean(), true_params["z"].mean(), atol=0.15
-        )
+    assert np.allclose(
+        results.samples["psi"].mean(), true_params["z"].mean(), atol=0.15
     )
+
 
 def test_occu_multi_species():
     data, _ = simulate_cs(simulate_missing=True, n_species=2, n_sites=30)
@@ -438,6 +420,7 @@ def test_occu_multi_species():
 
     assert results.samples["psi"].shape[-1] == 2
 
+
 def test_occu_spatial():
     data, true_params = simulate_cs(simulate_missing=True, spatial=True)
 
@@ -445,17 +428,10 @@ def test_occu_spatial():
 
     results = fit(occu_cs, **data, timeout=600)
 
-    assert (
-        np.allclose(
-            results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1
-        )
-    )
-    assert (
-        np.allclose(results.samples["gp_sd"].mean(), true_params["gp_sd"], atol=1.0)
-    )
-    assert (
-        np.allclose(results.samples["gp_l"].mean(), true_params["gp_l"], atol=0.5)
-    )
+    assert np.allclose(results.samples["psi"].mean(), true_params["z"].mean(), atol=0.1)
+    assert np.allclose(results.samples["gp_sd"].mean(), true_params["gp_sd"], atol=1.0)
+    assert np.allclose(results.samples["gp_l"].mean(), true_params["gp_l"], atol=0.5)
+
 
 def test_site_random_effects():
     data, true_params = simulate_cs(simulate_missing=True)
@@ -471,15 +447,14 @@ def test_site_random_effects():
         timeout=600,
     )
 
-    assert ("site_re_sd" in results.samples)
-    assert ("site_re_occ" in results.samples)
-    assert ("site_re_det" in results.samples)
-    assert (results.samples["site_re_sd"].mean() > 0)
-    assert (
-        np.allclose(
-            results.samples["psi"].mean(), true_params["z"].mean(), atol=0.15
-        )
+    assert "site_re_sd" in results.samples
+    assert "site_re_occ" in results.samples
+    assert "site_re_det" in results.samples
+    assert results.samples["site_re_sd"].mean() > 0
+    assert np.allclose(
+        results.samples["psi"].mean(), true_params["z"].mean(), atol=0.15
     )
+
 
 def test_obs_random_effects():
     data, true_params = simulate_cs(simulate_missing=True)
@@ -495,14 +470,13 @@ def test_obs_random_effects():
         timeout=600,
     )
 
-    assert ("obs_re_sd" in results.samples)
-    assert ("obs_re" in results.samples)
-    assert (results.samples["obs_re_sd"].mean() > 0)
-    assert (
-        np.allclose(
-            results.samples["psi"].mean(), true_params["z"].mean(), atol=0.15
-        )
+    assert "obs_re_sd" in results.samples
+    assert "obs_re" in results.samples
+    assert results.samples["obs_re_sd"].mean() > 0
+    assert np.allclose(
+        results.samples["psi"].mean(), true_params["z"].mean(), atol=0.15
     )
+
 
 def test_combined_random_effects():
     data, true_params = simulate_cs(simulate_missing=True)
@@ -519,14 +493,11 @@ def test_combined_random_effects():
         timeout=600,
     )
 
-    assert ("site_re_sd" in results.samples)
-    assert ("site_re_occ" in results.samples)
-    assert ("site_re_det" in results.samples)
-    assert ("obs_re_sd" in results.samples)
-    assert ("obs_re" in results.samples)
-    assert (
-        np.allclose(
-            results.samples["psi"].mean(), true_params["z"].mean(), atol=0.15
-        )
+    assert "site_re_sd" in results.samples
+    assert "site_re_occ" in results.samples
+    assert "site_re_det" in results.samples
+    assert "obs_re_sd" in results.samples
+    assert "obs_re" in results.samples
+    assert np.allclose(
+        results.samples["psi"].mean(), true_params["z"].mean(), atol=0.15
     )
-

@@ -1,10 +1,12 @@
+import math
+
 import jax
 import jax.numpy as jnp
-import math
 import numpyro
 import numpyro.distributions as dist
-from numpyro.primitives import _PYRO_STACK, plate as plate_handler
 from jax import lax
+from numpyro.primitives import _PYRO_STACK
+from numpyro.primitives import plate as plate_handler
 
 from biolith.regression.abstract import AbstractRegression
 
@@ -77,9 +79,7 @@ class BARTRegression(AbstractRegression):
         split_probs = alpha * (1 + depths) ** (-beta)
 
         with numpyro.plate(f"{self.name}_trees", self.n_trees):
-            with numpyro.plate(
-                f"{self.name}_internal_nodes", self.num_internal_nodes
-            ):
+            with numpyro.plate(f"{self.name}_internal_nodes", self.num_internal_nodes):
                 outer_plate_count = (
                     sum(1 for frame in _PYRO_STACK if isinstance(frame, plate_handler))
                     - 1
@@ -160,7 +160,9 @@ class BARTRegression(AbstractRegression):
                 raise ValueError(f"Unexpected parameter shape: {shape}.")
             tree_axis = tree_axes[0]
             node_axis = node_axes[0]
-            batch_axes = [i for i in range(len(shape)) if i not in (tree_axis, node_axis)]
+            batch_axes = [
+                i for i in range(len(shape)) if i not in (tree_axis, node_axis)
+            ]
             batch_shape = tuple(shape[i] for i in batch_axes)
             perm = batch_axes + [tree_axis, node_axis]
             return param.transpose(perm), batch_shape
@@ -181,7 +183,9 @@ class BARTRegression(AbstractRegression):
 
         if batch_shape:
             batch_size = math.prod(batch_shape)
-            leaf_values = leaf_values.reshape((batch_size, self.n_trees, self.num_nodes))
+            leaf_values = leaf_values.reshape(
+                (batch_size, self.n_trees, self.num_nodes)
+            )
             is_split_node = is_split_node.reshape(
                 (batch_size, self.n_trees, self.num_internal_nodes)
             )
@@ -201,7 +205,9 @@ class BARTRegression(AbstractRegression):
             perm = [len(batch_shape)] + list(range(len(batch_shape)))
             return final_prediction.transpose(perm)
 
-        final_prediction = predict_one(leaf_values, is_split_node, split_vars, split_values)
+        final_prediction = predict_one(
+            leaf_values, is_split_node, split_vars, split_values
+        )
 
         return final_prediction
 
@@ -213,7 +219,9 @@ class BARTRegression(AbstractRegression):
 
         shape = one_hot_feats.shape
         tree_axes = [i for i, d in enumerate(shape[:-1]) if d == self.n_trees]
-        node_axes = [i for i, d in enumerate(shape[:-1]) if d == self.num_internal_nodes]
+        node_axes = [
+            i for i, d in enumerate(shape[:-1]) if d == self.num_internal_nodes
+        ]
         if len(tree_axes) != 1 or len(node_axes) != 1:
             raise ValueError(f"Unexpected feature importance shape: {shape}.")
         counts = jnp.sum(one_hot_feats, axis=(tree_axes[0], node_axes[0]))
@@ -222,7 +230,8 @@ class BARTRegression(AbstractRegression):
         feature_importances = counts / (total_splits + 1e-10)
         if feature_importances.ndim > 1:
             feature_importances = feature_importances.transpose(
-                (feature_importances.ndim - 1,) + tuple(range(feature_importances.ndim - 1))
+                (feature_importances.ndim - 1,)
+                + tuple(range(feature_importances.ndim - 1))
             )
         numpyro.deterministic(f"{self.name}_feature_importances", feature_importances)
 

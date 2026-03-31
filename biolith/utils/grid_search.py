@@ -294,7 +294,9 @@ def grid_search_priors(
             )
 
     # Create stratification labels based on site detection history
-    site_detections = jnp.nansum(obs, axis=(0, 2, 3)) > 0  # True if site has ≥1 detection
+    site_detections = (
+        jnp.nansum(obs, axis=(0, 2, 3)) > 0
+    )  # True if site has ≥1 detection
     stratify_labels = site_detections.astype(int)
 
     # Check if we have both occupied and unoccupied sites
